@@ -1,96 +1,109 @@
-# Arquitectura inicial de Q-umplidor
+# Guía técnica — Arquitectura de Q-umplidor
 
-> **Estado del documento:** versión preliminar. Describe lo implementado en el prototipo local y lo que aún está pendiente. Si una decisión escrita en un ADR difiere de este documento, el ADR prevalece.
+> **Estado:** Avance 02. Describe lo que hay en `src/main.py` en la rama `main`. Lo que todavía no está integrado aparece en la sección 8 como pendiente. Si algo de aquí no coincide con el código, manda el código y hay que corregir este documento.
+
+Responsable: Oscar Aguilera
 
 ## 1. Propósito
 
-***Q-umplidor*** es un sistema para Linux que ejecuta, administra, observa y controla trabajos mediante una consola interactiva. Este documento describe cómo está organizado: qué componentes tiene, cómo se comunican y qué decisiones sostienen el diseño.
+Q-umplidor es un gestor de trabajos para Linux. Recibe comandos en una consola interactiva, ejecuta cada trabajo como un proceso hijo del sistema operativo y permite consultar su estado, su salida y su código de salida, cancelarlo y conservar el historial entre reinicios.
 
-## 2. Estilo arquitectónico
+## 2. Vista general
 
-Aplicación **en capas** escrita en Python 3, con la biblioteca estándar. Cada capa solo se comunica con la inmediata inferior:
-
-1. **Interfaz:** recibe comandos del usuario y muestra respuestas.
-2. **Lógica de trabajos:** asigna identificadores, controla estados y aplica el límite de concurrencia.
-3. **Ejecución:** lanza cada trabajo como un proceso independiente del sistema operativo.
-
-La concurrencia real la aportan los **procesos hijos** del sistema operativo. Los hilos de Python solo supervisan esos procesos, por lo que el GIL no limita la ejecución en paralelo de los trabajos.
-
-## 3. Diagrama
+Todo el sistema vive hoy en un solo archivo, `src/main.py`, con biblioteca estándar de Python 3 (ADR-0001). Internamente se separa en cuatro partes:
 
 ```mermaid
 flowchart TD
-    U["Usuario (terminal)"] -->|comandos escritos| CLI["cli.py<br/>consola e intérprete de comandos"]
-    CLI -->|órdenes al gestor| JM["job_manager.py (JobManager)<br/>IDs, estados con RLock y límite"]
-    JM -->|encola el trabajo| Q["Cola<br/>queue.Queue"]
-    Q -->|toma| H["Hilos trabajadores<br/>pool = límite de concurrencia"]
-    H -->|un Popen por trabajo| P["Procesos hijos<br/>subprocess.Popen y signal"]
-    P -->|llamadas al SO| SO["Sistema operativo Linux"]
-    R["Acceso remoto LAN/VPN<br/>pendiente"] -.->|órdenes| JM
-    JM -.->|guarda| DB["Persistencia<br/>pendiente: SQLite (tendencia)"]
-
-    classDef pendiente stroke-dasharray: 5 5
-    class R,DB pendiente
+    U["Usuario (terminal)"] -->|escribe comandos| C["Consola<br/>ciclo while True + input()"]
+    C -->|crea / consulta / cancela| T["Tabla de trabajos<br/>diccionario trabajos"]
+    C -->|lanza| L["lanzar_trabajo()<br/>subprocess.Popen"]
+    L -->|un proceso por trabajo| P["Procesos hijos"]
+    P -->|stdout| O["data/salidas/&lt;id&gt;.out"]
+    P -->|stderr| E["data/salidas/&lt;id&gt;.err"]
+    T -->|guardar_trabajos()| J["data/trabajos.json"]
+    J -->|cargar_trabajos() al iniciar| T
 ```
 
-*Las líneas y bordes discontinuos indican componentes pendientes.*
+## 3. Componentes
 
-## 4. Componentes
-
-| Componente | Archivo o biblioteca | Responsabilidad | Estado |
-|---|---|---|---|
-| Arranque | `src/main.py` | Punto de entrada: inicia la consola | Implementado |
-| Consola e intérprete | `src/cli.py` | Muestra el prompt `Q-umplidor>`, interpreta los comandos (`sleep`, `estado`, `listar`, `codigo`, `cancelar`) e imprime las respuestas | Implementado |
-| Gestor de trabajos | `src/job_manager.py` (clase `JobManager`) | Asigna IDs únicos, mantiene la tabla de estados, aplica el límite de concurrencia y captura stdout y stderr por separado | Implementado |
-| Cola de espera | `queue.Queue` | Guarda los trabajos que esperan turno | Implementado |
-| Hilos trabajadores | `threading` (`_worker_loop`) | Pool fijo, de tamaño igual al límite de concurrencia, que toma trabajos de la cola y los lanza | Implementado |
-| Procesos hijos | `subprocess.Popen`, `signal` | Ejecutan cada trabajo como proceso separado y permiten cancelarlo | Implementado |
-| Persistencia | Por definir (tendencia: SQLite) | Conservar el historial y recuperarlo tras un reinicio | Pendiente |
-| Acceso remoto LAN/VPN | Por definir | Recibir órdenes de otros equipos y entregarlas al mismo `JobManager` | Pendiente |
-
-## 5. Flujos principales
-
-### 5.1 Enviar un trabajo en segundo plano (`sleep 10 &`)
-
-1. `cli.py` recibe el texto y lo interpreta como un envío en segundo plano.
-2. `JobManager` asigna un ID único, registra el trabajo y lo coloca en la cola.
-3. Un hilo trabajador toma el trabajo y lo lanza con `subprocess.Popen`.
-4. La consola imprime el ID y vuelve a mostrar el prompt, mientras el trabajo corre por separado.
-
-### 5.2 Consultar el estado o el código de salida (`estado <id>`, `codigo <id>`)
-
-1. `cli.py` valida el formato del comando y el ID.
-2. `JobManager` busca el trabajo en la tabla de estados.
-3. Si el proceso ya terminó, se informa su estado y su código de salida. Si sigue en ejecución, se informa que aún no tiene código.
-
-### 5.3 Cancelar un trabajo (`cancelar <id>`)
-
-1. Si el trabajo está **en cola**, se retira y se marca como cancelado.
-2. Si está **en ejecución**, se envía una señal al proceso hijo y se marca como cancelado.
-
-## 6. Concurrencia y sincronización
-
-- **Límite estructural:** nunca existen más hilos trabajadores que el límite de concurrencia configurado, por lo que no se ejecutan más trabajos simultáneos que ese límite.
-- **Estado compartido:** la cola y la tabla de estados son accedidas por quien recibe las órdenes y por los hilos trabajadores. Se protegen con un `threading.RLock`.
-- **Verificación:** la prueba `test_respects_concurrency_limit` lanza 4 trabajos con límite 2 y comprueba que nunca haya más de 2 en ejecución. Las pruebas `test_cancel_queued_job` y `test_cancel_running_job` validan la cancelación y su sincronización.
-
-## 7. Decisiones de diseño relacionadas
-
-| ADR | Decisión | Estado |
+| Componente | Dónde está | Qué hace |
 |---|---|---|
-| [ADR-0001](docs/decisions/0001-lenguaje-runtime.md) | Python 3 con biblioteca estándar (`subprocess`, `threading`, `queue`, `signal`) | Aceptado |
-| [ADR-0002](docs/decisions/0002-modelo-concurrencia.md) | Pool fijo de hilos trabajadores sobre una `queue.Queue` compartida, un `Popen` por trabajo | Aceptado |
-| [ADR-0003](docs/decisions/0003-persistencia.md) | Mecanismo de persistencia (tendencia: SQLite) | Propuesta abierta |
+| Consola | Ciclo `while True` al final de `main.py` | Muestra el prompt `Q-umplidor>`, separa el comando en palabras y llama a la parte que corresponde. Un comando inválido solo imprime un aviso. |
+| Tabla de trabajos | Diccionario global `trabajos` y contador `siguiente_id` | Guarda por ID: proceso, comando, inicio, fin, estado, código y si se canceló. |
+| Lanzamiento | `lanzar_trabajo()` y `registrar_trabajo()` | Crea el proceso hijo con su stdout y stderr redirigidos a archivos, y lo agrega a la tabla. |
+| Supervisión | `actualizar_trabajo()` / `estado_trabajo()` | Llama `poll()` al proceso. Si ya terminó, guarda código y hora de fin, decide el estado final y lo persiste. |
+| Persistencia | `guardar_trabajos()` / `cargar_trabajos()` | Escribe y lee `data/trabajos.json`. |
+| Consulta de salidas | `mostrar_archivo()` | Lee el archivo `.out` o `.err` de un trabajo. |
 
-## 8. Pendientes y riesgos
+## 4. Comandos
 
-| Tema | Descripción |
+| Comando | Qué hace internamente |
 |---|---|
-| Persistencia | Resolver el ADR-0003 antes del Hito 2. Con SQLite, cada hilo debe usar su propia conexión o protegerla con el `RLock`, porque una conexión solo se puede usar desde el hilo que la creó |
-| Recuperación | Al reiniciar, los trabajos que estaban en cola o en ejecución deben marcarse como interrumpidos y nunca reportarse como en ejecución (ver [modelo de estados](modelo-de-estados.md)) |
-| Acceso remoto | Definir el protocolo de red, la forma de autenticar y cómo comparte el `JobManager` con la consola local |
-| Cola llena | Documentar el comportamiento del sistema cuando se alcanza el límite de la cola |
+| `sleep N` | `time.sleep(N)` en el mismo proceso (primer plano). |
+| `sleep N &` | Lanza `python3 -c "import time; time.sleep(N)"` como hijo. |
+| `ejecutar <programa> [args] &` | Separa los argumentos con `shlex.split` y lanza el programa sin shell. |
+| `estado <id>` / `listar` | Actualizan cada trabajo con `poll()` y muestran estado y tiempo. |
+| `codigo <id>` | Muestra el código guardado. Si murió por señal, lo muestra como Bash (`128 + señal`, por ejemplo 143 para SIGTERM). |
+| `salida <id>` / `errores <id>` | Muestran `data/salidas/<id>.out` o `.err`. |
+| `cancelar <id>` | SIGTERM, espera hasta 2 s, SIGKILL si no terminó, y `wait()`. |
 
-## 9. Requisitos relacionados
+## 5. Procesos, salidas y recursos
 
-RF-03, RF-04, RF-05, RF-12, RF-13, RF-25, RF-26, RNF-04, RNF-07, RNF-27.
+**Un proceso por trabajo.** Cada trabajo corre en su propio proceso (`subprocess.Popen`), no en un hilo. Así corren en paralelo de verdad, se pueden detener con señales y si uno falla no tumba la consola.
+
+**stdout y stderr separados (RF-11).** `lanzar_trabajo()` abre dos archivos por trabajo y se los da a `Popen` como `stdout` y `stderr`. El hijo escribe directo en ellos, aunque la consola esté esperando otro comando, y la salida se puede consultar aunque Q-umplidor se reinicie.
+
+**Descriptores de archivo.** El hijo recibe su propia copia de los descriptores. El padre abre los archivos dentro de un `with`, así que los cierra en cuanto el hijo arrancó y no se acumulan archivos abiertos.
+
+**Entrada estándar.** Los trabajos reciben `stdin=DEVNULL`, para que no puedan leer lo que el usuario escribe en la consola.
+
+**Programa inexistente.** Si `Popen` lanza `OSError`, se borran los dos archivos recién creados, se muestra el error y no se registra el trabajo ni se consume un ID.
+
+**Recolección de hijos (zombis).** El código de salida de un hijo se lee con `poll()` cuando alguien consulta (`estado`, `listar`, `codigo`, `cancelar`) y con `wait()` al cancelar. Hasta esa consulta, un hijo que terminó solo queda como zombi (`Z` en `ps`). Ver pendientes.
+
+## 6. Estados
+
+| Estado en el código | Cuándo |
+|---|---|
+| En ejecución | El proceso sigue vivo (`poll()` devuelve `None`). |
+| Terminado | Terminó con código 0. |
+| Falló (código N) | Terminó con código distinto de 0 y no fue cancelado. |
+| Cancelado | Se pidió `cancelar`. |
+| Interrumpido | Estaba en ejecución cuando Q-umplidor se cerró o se reinició. |
+
+El modelo completo (con `QUEUED`) está en [ModeloDeEstados.md](ModeloDeEstados.md). El cliente pide como mínimo `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED` y `CANCELED` (RF-06); los nombres en español del código deben quedar mapeados a esos.
+
+## 7. Persistencia y recuperación
+
+- **Formato:** `data/trabajos.json` con `siguiente_id` y la lista de trabajos (sin el objeto `Popen`, que no se puede guardar).
+- **Escritura atómica:** se escribe en `trabajos.tmp` y luego `os.replace()` lo cambia por el archivo real. Si el programa muere a mitad, queda el archivo anterior completo, nunca uno a medias.
+- **Al arrancar:** `cargar_trabajos()` valida IDs (enteros, positivos, sin repetir) y el contador. Si el archivo está dañado, el programa se detiene con un mensaje en vez de arrancar con datos inválidos.
+- **Recuperación:** los trabajos que estaban "En ejecución" pasan a "Interrumpido", porque sus procesos ya no pertenecen a esta sesión.
+- **Al salir normalmente:** los trabajos activos se terminan (SIGTERM → SIGKILL), se marcan como "Interrumpido" y se guarda el archivo.
+- **Salidas:** los archivos de `data/salidas/` no se borran al reiniciar, por eso `salida` y `errores` siguen funcionando con trabajos anteriores.
+
+La decisión real es JSON con escritura atómica, no SQLite: el ADR-0003 debe actualizarse para reflejarlo.
+
+## 8. Pendientes del Avance 02
+
+| Tema | Requisito | Responsable |
+|---|---|---|
+| Cola de trabajos | RF-03 | Diego |
+| Límite configurable de concurrencia | RF-05 | Ruy |
+| Estados y tiempos (nombres del cliente) | RF-06 | Ruy |
+| Escalamiento documentado de la cancelación | RF-30 | Ruy |
+| Cancelación de trabajos en cola | RF-10 | Oscar |
+| Rechazo explícito con cola llena | RF-25, RNF-29 | Oscar |
+| Bitácora de eventos | — | Marlene |
+| Solicitudes concurrentes o duplicadas | RF-26 | Marlene |
+| Liberación de recursos (recolectar hijos sin esperar una consulta) | — | Marlene |
+
+Cuando la cola exista, `lanzar_trabajo()` es el punto donde la cola debe arrancar cada trabajo, para que todos conserven la captura de stdout y stderr.
+
+## 9. Decisiones relacionadas
+
+| ADR | Tema |
+|---|---|
+| [ADR-0001](../decisions/ADR-0001.md) | Python 3 con biblioteca estándar |
+| [ADR-0002](../decisions/ADR-0002.md) | Concurrencia: un proceso por trabajo, cola con pool de hilos |
+| [ADR-0003](../decisions/ADR-0003.md) | Persistencia |
