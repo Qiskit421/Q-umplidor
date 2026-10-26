@@ -12,10 +12,10 @@ Desarrollaremos **Q-umplidor**, que funcionará como un gestor de trabajos para 
 
 | Nombre | Rol | Correo |
 |--------|-----|--------|
-| Oscar Omar Aguilera De La Torre | Responsable principal | oscar.aguilera7936@alumnos.udg.mx |
+| Diego Misael Camacho Nuño | Responsable principal | diego.camacho8526@alumnos.udg.mx |
 | Marlene Ximena Sandoval Garcia | Ingeniería | marlene.sandoval5114@alumnos.udg.mx |
 | Ruy Eleazar Valle Rojas | Verificación | ruy.valle6299@alumnos.udg.mx |
-| Diego Misael Camacho Nuño | Revisor de producto | diego.camacho8526@alumnos.udg.mx |
+| Oscar Omar Aguilera De La Torre | Revisor de producto | oscar.aguilera7936@alumnos.udg.mx |
 
 ## 🏗️ Construcción provisional
 
