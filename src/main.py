@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import time
@@ -9,6 +10,65 @@ from collections import deque
 
 ARCHIVO_TRABAJOS = Path(__file__).resolve().parent.parent / "data" / "trabajos.json"
 CARPETA_SALIDAS = ARCHIVO_TRABAJOS.parent / "salidas"
+
+
+def rutas_salida(id_trabajo):
+    """Cada trabajo tiene dos archivos: uno para stdout y otro para stderr."""
+    return (
+        CARPETA_SALIDAS / f"{id_trabajo}.out",
+        CARPETA_SALIDAS / f"{id_trabajo}.err",
+    )
+
+
+def lanzar_trabajo(id_trabajo, argumentos):
+    """Lanza el proceso hijo con stdout y stderr redirigidos a archivos separados."""
+    CARPETA_SALIDAS.mkdir(parents=True, exist_ok=True)
+    ruta_out, ruta_err = rutas_salida(id_trabajo)
+    # El hijo recibe su propia copia de los descriptores. El padre cierra los
+    # suyos al salir del "with" para no dejar archivos abiertos.
+    try:
+        with ruta_out.open("wb") as salida, ruta_err.open("wb") as errores:
+            return subprocess.Popen(
+                argumentos,
+                stdin=subprocess.DEVNULL,
+                stdout=salida,
+                stderr=errores,
+            )
+    except OSError:
+        # Si el programa no existe, no dejamos archivos de un trabajo que nunca se registró.
+        ruta_out.unlink(missing_ok=True)
+        ruta_err.unlink(missing_ok=True)
+        raise
+
+
+def registrar_trabajo(proceso, entrada):
+    """Guarda el trabajo recién lanzado y muestra su ID."""
+    global siguiente_id
+    trabajos[siguiente_id] = {
+        "proceso": proceso,
+        "comando": entrada,
+        "inicio": time.time(),
+        "fin": None,
+        "estado": "En ejecución",
+        "codigo": None,
+        "cancelado": False,
+    }
+    print(f"ID: [{siguiente_id}]")
+    siguiente_id += 1
+    guardar_trabajos()
+
+
+def mostrar_archivo(id_trabajo, indice, comando, descripcion):
+    """Muestra el contenido de stdout (indice 0) o stderr (indice 1) de un trabajo."""
+    ruta = rutas_salida(id_trabajo)[indice]
+    if not ruta.exists():
+        print(f"{comando}: el trabajo [{id_trabajo}] no tiene {descripcion} registrada")
+        return
+    contenido = ruta.read_text(encoding="utf-8", errors="replace")
+    if contenido:
+        print(contenido, end="" if contenido.endswith("\n") else "\n")
+    else:
+        print(f"{comando}: el trabajo [{id_trabajo}] no ha escrito nada en {descripcion}")
 
 
 def rutas_salida(id_trabajo):
@@ -467,30 +527,40 @@ while True:
         # Caso: sleep 10 &
         elif len(partes) == 3 and partes[2] == "&":
             try:
-
-                proceso = subprocess.Popen([
+                proceso = lanzar_trabajo(siguiente_id, [
                     sys.executable,
                     "-c",
                     f"import time; time.sleep({segundos})"
                 ])
-
-                # Guarda el trabajo
-                trabajos[siguiente_id] = {
-                    "proceso": proceso,
-                    "comando": entrada,
-                    "inicio": time.time(),
-                    "fin": None,
-                    "estado": "En ejecución",
-                    "codigo": None,
-                    "cancelado": False,
-                }
-
-                print(f"ID: [{siguiente_id}]")
-                siguiente_id += 1
-                guardar_trabajos()
-
+                registrar_trabajo(proceso, entrada)
             except (ValueError, OverflowError):
                 print("sleep: invalid time interval")
+
+    # Ejecutar un programa cualquiera en segundo plano
+    elif partes[0] == "ejecutar":
+        try:
+            argumentos = shlex.split(entrada)[1:]
+        except ValueError:
+            print("ejecutar: comillas sin cerrar")
+            continue
+        if not argumentos or argumentos[-1] != "&" or len(argumentos) == 1:
+            print("ejecutar: uso: ejecutar <programa> [argumentos] &")
+            continue
+        try:
+            proceso = lanzar_trabajo(siguiente_id, argumentos[:-1])
+        except OSError as error:
+            print(f"ejecutar: no se pudo iniciar '{argumentos[0]}': {error.strerror}")
+            continue
+        registrar_trabajo(proceso, entrada)
+
+    # Mostrar stdout o stderr de un trabajo
+    elif partes[0] in ("salida", "errores"):
+        id_trabajo = obtener_id(partes, partes[0])
+        if id_trabajo is not None:
+            if partes[0] == "salida":
+                mostrar_archivo(id_trabajo, 0, "salida", "la salida estándar")
+            else:
+                mostrar_archivo(id_trabajo, 1, "errores", "la salida de error")
 
     # Consulta el estado de un trabajo
     elif partes[0] == "estado":

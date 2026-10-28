@@ -1,0 +1,5 @@
+Caso: TC-006 (RF-11, RF-07)
+Fecha: Sun Oct 25 16:29:04 CST 2026
+Commit: 5d35d48
+Entorno: Linux 6.18.54.1-microsoft-standard-WSL2, Python 3.14.4
+Resultado: PASS
