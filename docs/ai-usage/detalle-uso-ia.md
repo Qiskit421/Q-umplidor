@@ -85,3 +85,23 @@ Cada entrada responde seis cosas, como pide el estándar del cliente (doc. 04): 
 - **Motivo técnico del rechazo:**
 - **Prueba agregada:**
 - **Aprendizaje:**
+
+## IA-009 — Cancelación en cola y rechazo con cola llena
+
+- **Integrante:** Oscar Aguilera
+- **Objetivo:** implementar RF-10 (cancelar un trabajo que espera en la cola) y RF-25 / RNF-29 (rechazo explícito con la cola llena) sobre la cola de Diego (PR #130).
+- **Resultado recibido:** cambios en `cancelar` y `registrar_en_cola()`, capacidad configurable con `Q_CAPACIDAD_COLA` y un script de prueba (`verif/scripts/prueba_cola.sh`) para TC-005 y TC-016.
+- **Revisión realizada:** se corrió el script sobre cada commit: con el código original da FAIL y con los cambios da PASS en los dos casos. Se probó también un valor inválido de `Q_CAPACIDAD_COLA` y el reinicio.
+- **Cambios aplicados (deficiencia encontrada):** la primera versión probada hacía tronar `estado` y `listar` con un trabajo cancelado en cola, porque `tiempo_trabajo()` restaba `None`. Se agregó la protección en un commit aparte (`bb8d932`) y se avisó en el PR #130, donde el error ya existía.
+- **Prueba agregada:** TC-005 y TC-016 (`verif/results/TC-005-20261028/`, `verif/results/TC-016-20261028/`).
+- **Aprendizaje:** la cancelación y el hilo de la cola deben decidir bajo el mismo candado; si no, un trabajo se puede cancelar y arrancar al mismo tiempo.
+
+## IA-010 — Incidente INC-001 y guías con la cola
+
+- **Integrante:** Oscar Aguilera
+- **Objetivo:** documentar el incidente de la cancelación en cola y actualizar las guías.
+- **Resultado recibido:** borrador de `INC-001.md` y secciones nuevas en las guías.
+- **Revisión realizada:** se reprodujo el síntoma del incidente sobre el commit `9bc5c83` (el trabajo "cancelado" sí se ejecutaba) y se comprobaron los ejemplos de la guía contra el código.
+- **Cambios aplicados:**
+- **Prueba agregada:** TC-005 como prueba de regresión del incidente.
+- **Aprendizaje:**
