@@ -1,0 +1,5 @@
+Q-umplidor> ID: [1]
+Q-umplidor> hola
+Q-umplidor> fallo
+Q-umplidor> codigo: el trabajo [1] terminó con código de salida 3
+Q-umplidor> 
