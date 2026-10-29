@@ -485,6 +485,11 @@ while True:
     if len(partes) == 0:
         continue
 
+    # "queue cancelar <id>" es un alias de "cancelar <id>". Sin esto, queue lo
+    # formaría como un comando de bash llamado "cancelar" y no cancelaría nada.
+    if len(partes) >= 2 and partes[0] == "queue" and partes[1] == "cancelar":
+        partes = partes[1:]
+
     if partes[0] == "help":
         if len(partes) != 1:
             print("help: no acepta argumentos. Uso: help")
@@ -501,6 +506,7 @@ while True:
 
         print("  queue <comando>     Ejecutar echo, sleep (&) o un programa en cola.")
         print("  queue               Mostrar la cola de trabajos.")
+        print("  queue cancelar <id> Igual que cancelar <id>.")
         print("  salida <id>         Mostrar la salida estándar (stdout).")
         print("  errores <id>        Mostrar la salida de error (stderr).")
         print("  help                Mostrar esta ayuda.")
