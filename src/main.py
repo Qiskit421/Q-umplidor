@@ -117,6 +117,21 @@ def registrar_trabajo(proceso, entrada):
     guardar_trabajos()
 
 
+# Capacidad máxima de trabajos esperando en la cola (RF-25). Se configura con la
+# variable de entorno Q_CAPACIDAD_COLA, por ejemplo: Q_CAPACIDAD_COLA=3 python3 src/main.py
+def leer_capacidad_cola():
+    valor = os.environ.get("Q_CAPACIDAD_COLA", "5")
+    try:
+        capacidad = int(valor)
+        if capacidad < 1:
+            raise ValueError
+    except ValueError:
+        raise SystemExit(f"Q_CAPACIDAD_COLA debe ser un entero mayor o igual a 1 (se recibió '{valor}')")
+    return capacidad
+
+
+CAPACIDAD_COLA = leer_capacidad_cola()
+
 # Cola exclusiva para comandos "queue sleep N".
 # Se reutilizan lanzar_trabajo() y rutas_salida() para capturar stdout/stderr.
 cola_ids = deque()
@@ -128,6 +143,13 @@ id_cola_activo = None
 def registrar_en_cola(comando, entrada):
     """Registra cualquier comando pendiente y lo agrega al final de la cola."""
     global siguiente_id
+    with condicion_cola:
+        en_espera = len(cola_ids)
+    if en_espera >= CAPACIDAD_COLA:
+        # Rechazo explícito (RF-25, RNF-29): no se registra, no consume ID y no bloquea.
+        print(f"queue: cola llena ({en_espera}/{CAPACIDAD_COLA} en espera), trabajo rechazado. "
+              "Intenta de nuevo cuando avance la cola.")
+        return
     id_trabajo = siguiente_id
     ruta_out, ruta_err = rutas_salida(id_trabajo)
     CARPETA_SALIDAS.mkdir(parents=True, exist_ok=True)
