@@ -416,6 +416,8 @@ def estado_trabajo(trabajo):
 
 def tiempo_trabajo(trabajo):
     """Evita que el tiempo de un trabajo terminado siga aumentando."""
+    if trabajo["inicio"] is None:
+        return 0  # Todavía en cola, o cancelado antes de arrancar.
     return int((trabajo["fin"] or time.time()) - trabajo["inicio"])
 
 
