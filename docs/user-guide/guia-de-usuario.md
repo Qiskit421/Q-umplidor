@@ -100,6 +100,7 @@ Con `queue` mandas trabajos a una fila: se ejecutan **de uno en uno, en el orden
 - `queue COMANDO` — agrega el comando al final de la cola y te da su ID. Por ejemplo `queue sleep 5` o `queue echo hola`.
 - `queue` (solo) — enseña los trabajos de la cola con su archivo de salida y el tiempo que les queda.
 - `cancelar ID` — también sirve para un trabajo que **sigue esperando**: se quita de la fila y nunca llega a ejecutarse.
+- `queue cancelar ID` — hace exactamente lo mismo que `cancelar ID`, por si te sale más natural escribirlo así.
 
 ```text
 Q-umplidor> queue sleep 5

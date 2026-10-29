@@ -106,3 +106,13 @@ Cada entrada responde seis cosas, como pide el estándar del cliente (doc. 04): 
 - **Cambios aplicados:**
 - **Prueba agregada:** TC-005 como prueba de regresión del incidente.
 - **Aprendizaje:**
+
+## IA-011 — Alias `queue cancelar <id>`
+
+- **Integrante:** Oscar Aguilera
+- **Objetivo:** que `queue cancelar <id>` cancele igual que `cancelar <id>`.
+- **Resultado recibido:** al probarlo se encontró que `queue cancelar 2` formaba un trabajo nuevo con el texto "cancelar 2", bash respondía `command not found` (código 127) y el trabajo 2 no se cancelaba. Se propuso traducir `queue cancelar` a `cancelar` antes de interpretar el comando.
+- **Revisión realizada:** se reprodujo el problema antes del cambio y se amplió TC-005 para cancelar un trabajo con el alias y comprobar que no se crea un trabajo nuevo.
+- **Cambios aplicados:**
+- **Prueba agregada:** TC-005 ampliado en `verif/scripts/prueba_cola.sh`.
+- **Aprendizaje:**
