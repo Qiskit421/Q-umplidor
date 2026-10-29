@@ -68,17 +68,26 @@ flowchart TD
 | En ejecución | El proceso sigue vivo (`poll()` devuelve `None`). |
 | Terminado | Terminó con código 0. |
 | Falló (código N) | Terminó con código distinto de 0 y no fue cancelado. |
-| Cancelado | Se pidió `cancelar`. |
+| En cola | Registrado con `queue`, esperando turno; todavía no tiene proceso (`inicio` = `None`). |
+| Cancelado | Se pidió `cancelar`, en ejecución o en cola. |
 | Interrumpido | Estaba en ejecución cuando Q-umplidor se cerró o se reinició. |
 
 El modelo completo (con `QUEUED`) está en [ModeloDeEstados.md](ModeloDeEstados.md). El cliente pide como mínimo `QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED` y `CANCELED` (RF-06); los nombres en español del código deben quedar mapeados a esos.
+
+## 6.1 Cola de trabajos
+
+- **Estructura:** `cola_ids` (un `deque` con los IDs en espera) protegida por `condicion_cola` (`threading.Condition`).
+- **Hilo de la cola:** `procesar_cola()` corre en un hilo aparte. Espera en la condición, saca el siguiente ID y lo ejecuta hasta que termina; así los trabajos de la cola corren de uno en uno y en orden.
+- **Capacidad (RF-25, RNF-29):** `CAPACIDAD_COLA` se lee de la variable de entorno `Q_CAPACIDAD_COLA` (por defecto 5, mínimo 1). Si al encolar ya hay esa cantidad esperando, `registrar_en_cola()` rechaza de inmediato: no registra, no consume ID y no bloquea. Un valor inválido detiene el arranque con un mensaje.
+- **Cancelar en cola (RF-10):** `cancelar` busca el ID en `cola_ids` **dentro de `condicion_cola`**, el mismo candado que usa el hilo. Si lo encuentra, lo retira y lo marca "Cancelado" sin que llegue a arrancar. Así el hilo y la consola nunca deciden sobre el mismo trabajo al mismo tiempo. Si el hilo ya lo tomó pero aún no tiene proceso, se avisa que está arrancando. Ver [INC-001](../incidents/INC-001.md).
+- **Tiempo:** `tiempo_trabajo()` devuelve 0 para trabajos sin `inicio` (en cola o cancelados antes de arrancar).
 
 ## 7. Persistencia y recuperación
 
 - **Formato:** `data/trabajos.json` con `siguiente_id` y la lista de trabajos (sin el objeto `Popen`, que no se puede guardar).
 - **Escritura atómica:** se escribe en `trabajos.tmp` y luego `os.replace()` lo cambia por el archivo real. Si el programa muere a mitad, queda el archivo anterior completo, nunca uno a medias.
 - **Al arrancar:** `cargar_trabajos()` valida IDs (enteros, positivos, sin repetir) y el contador. Si el archivo está dañado, el programa se detiene con un mensaje en vez de arrancar con datos inválidos.
-- **Recuperación:** los trabajos que estaban "En ejecución" pasan a "Interrumpido", porque sus procesos ya no pertenecen a esta sesión.
+- **Recuperación:** los trabajos que estaban "En ejecución" pasan a "Interrumpido", porque sus procesos ya no pertenecen a esta sesión. Los que estaban "En cola" se vuelven a formar y se ejecutan.
 - **Al salir normalmente:** los trabajos activos se terminan (SIGTERM → SIGKILL), se marcan como "Interrumpido" y se guarda el archivo.
 - **Salidas:** los archivos de `data/salidas/` no se borran al reiniciar, por eso `salida` y `errores` siguen funcionando con trabajos anteriores.
 
@@ -88,17 +97,17 @@ La decisión real es JSON con escritura atómica, no SQLite: el ADR-0003 debe ac
 
 | Tema | Requisito | Responsable |
 |---|---|---|
-| Cola de trabajos | RF-03 | Diego |
+| Cola de trabajos | RF-03 | Diego — implementada (PR #130) |
 | Límite configurable de concurrencia | RF-05 | Ruy |
 | Estados y tiempos (nombres del cliente) | RF-06 | Ruy |
 | Escalamiento documentado de la cancelación | RF-30 | Ruy |
-| Cancelación de trabajos en cola | RF-10 | Oscar |
-| Rechazo explícito con cola llena | RF-25, RNF-29 | Oscar |
+| Cancelación de trabajos en cola | RF-10 | Oscar — implementada (PR #133, TC-005) |
+| Rechazo explícito con cola llena | RF-25, RNF-29 | Oscar — implementado (PR #133, TC-016) |
 | Bitácora de eventos | — | Marlene |
 | Solicitudes concurrentes o duplicadas | RF-26 | Marlene |
 | Liberación de recursos (recolectar hijos sin esperar una consulta) | — | Marlene |
 
-Cuando la cola exista, `lanzar_trabajo()` es el punto donde la cola debe arrancar cada trabajo, para que todos conserven la captura de stdout y stderr.
+La cola hoy abre sus propios archivos de salida en `procesar_cola()` en lugar de llamar a `lanzar_trabajo()`; conviene unificarlo para que haya un solo punto donde se lanzan procesos.
 
 ## 9. Decisiones relacionadas
 
