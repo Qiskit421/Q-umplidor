@@ -1,0 +1,6 @@
+Caso: TC-016 (RF-25, RNF-29)
+Fecha: Wed Oct 28 22:05:32 CST 2026
+Commit: 41d5a5d
+Entorno: Linux 6.18.54.1-microsoft-standard-WSL2, Python 3.14.4
+Configuración: Q_CAPACIDAD_COLA=2
+Resultado: PASS
