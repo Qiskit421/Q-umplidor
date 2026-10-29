@@ -76,15 +76,16 @@ Cada entrada responde seis cosas, como pide el estándar del cliente (doc. 04): 
 - **Prueba agregada:** Escenario A del plan de verificación (instalar e iniciar solo con la documentación).
 - **Aprendizaje:** la versión anterior describía `cli.py` y `job_manager.py`, que nunca llegaron al repositorio; la documentación tiene que revisarse contra el código en cada avance.
 
-## IA-008 — (resultado rechazado)
+## IA-008 — Comando para revisar el PR #129 (rechazado)
 
-- **Integrante:**
-- **Objetivo:**
-- **Resultado recibido:**
-- **Revisión realizada:**
-- **Motivo técnico del rechazo:**
-- **Prueba agregada:**
-- **Aprendizaje:**
+- **Integrante:** Oscar Aguilera
+- **Objetivo:** ver desde la terminal el estado del PR #129, sus revisores y los issues que cierra (#127 y #128).
+- **Resultado recibido:** un comando `gh pr view 129 --json state,title,reviewRequests,reviews,closingIssuesReferences ...`.
+- **Revisión realizada:** se ejecutó en WSL2 con `gh` 2.46.0 antes de usarlo como referencia.
+- **Motivo técnico del rechazo:** el comando falló con `Unknown JSON field: "closingIssuesReferences"`; ese campo no existe en la versión de `gh` instalada (la propia herramienta listó los campos válidos). La IA lo propuso sin considerar la versión del entorno.
+- **Qué se hizo en su lugar:** se usó un comando solo con campos válidos (`state`, `title`, `reviewDecision`, `reviewRequests`, `reviews`), y los issues ligados se verificaron en la sección *Development* del PR en GitHub.
+- **Prueba agregada:** no aplica (no se integró nada al repositorio).
+- **Aprendizaje:** un resultado de la IA que depende de herramientas externas hay que probarlo en el entorno real; las opciones cambian entre versiones.
 
 ## IA-009 — Cancelación en cola y rechazo con cola llena
 
