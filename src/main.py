@@ -473,7 +473,7 @@ while True:
         print("  estado <id>         Consultar el estado de un trabajo.")
         print("  listar              Listar los trabajos registrados.")
         print("  codigo <id>         Consultar el código de salida.")
-        print("  cancelar <id>       Cancelar un trabajo.")
+        print("  cancelar <id>       Cancelar un trabajo en ejecución o en cola.")
 
         print("\n-------------------- AVANCE 02 --------------------\n")
 
@@ -618,10 +618,27 @@ while True:
         id_trabajo = obtener_id(partes, "cancelar")
         if id_trabajo is not None:
             trabajo = trabajos[id_trabajo]
+
+            # Trabajo en cola: se retira bajo el mismo candado que usa el hilo de la
+            # cola, así nunca se cancela y se arranca al mismo tiempo (RF-10).
+            with condicion_cola:
+                en_cola = id_trabajo in cola_ids
+                if en_cola:
+                    cola_ids.remove(id_trabajo)
+                    trabajo["cancelado"] = True
+                    trabajo["estado"] = "Cancelado"
+                    trabajo["fin"] = time.time()
+            if en_cola:
+                guardar_trabajos()
+                print(f"Trabajo [{id_trabajo}] cancelado (estaba en cola, no llegó a ejecutarse)")
+                continue
+
             estado = estado_trabajo(trabajo)
             proceso = trabajo["proceso"]
 
-            if proceso is None:
+            if proceso is None and id_trabajo == id_cola_activo:
+                print(f"cancelar: el trabajo [{id_trabajo}] está arrancando, intenta de nuevo en un momento")
+            elif proceso is None:
                 print(f"cancelar: el trabajo [{id_trabajo}] ya terminó ({estado})")
             else:
                 trabajo["cancelado"] = True
