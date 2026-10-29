@@ -19,12 +19,14 @@ encabezado() {  # $1 = caso, $2 = requisitos, $3 = carpeta
 }
 
 # ---------- TC-005: cancelar en cola y en ejecución ----------
+# Cancela el 2 con "cancelar" y el 4 con el alias "queue cancelar" (que no debe
+# formarse como trabajo nuevo), y el 1 mientras se ejecuta.
 R=verif/results/TC-005-$FECHA; mkdir -p "$R"; encabezado TC-005 "RF-10" "$R"
 rm -rf data
 {
-    printf 'queue sleep 2\nqueue sleep 2\nqueue sleep 2\n'
+    printf 'queue sleep 2\nqueue sleep 2\nqueue sleep 2\nqueue sleep 2\n'
     sleep 0.5
-    printf 'cancelar 2\nestado 2\ncancelar 1\n'
+    printf 'cancelar 2\nestado 2\nqueue cancelar 4\ncancelar 1\n'
     sleep 3
     printf 'listar\n'
 } | python3 src/main.py > "$R/salida_consola.txt" 2>&1
@@ -32,6 +34,8 @@ INICIO_2=$(python3 -I -c 'import json; d=json.load(open("data/trabajos.json")); 
 echo "inicio del trabajo 2 en trabajos.json: $INICIO_2" >> "$R/salida_consola.txt"
 if grep -q 'Trabajo \[2\] cancelado (estaba en cola' "$R/salida_consola.txt" \
    && grep -q '\[2\] sleep 2 -> Cancelado' "$R/salida_consola.txt" \
+   && grep -q 'Trabajo \[4\] cancelado (estaba en cola' "$R/salida_consola.txt" \
+   && ! grep -q 'ID: \[5\]' "$R/salida_consola.txt" \
    && grep -q 'Trabajo \[1\] cancelado' "$R/salida_consola.txt" \
    && grep -qE '^3 +Terminado' "$R/salida_consola.txt" \
    && [ "$INICIO_2" = "None" ]; then
