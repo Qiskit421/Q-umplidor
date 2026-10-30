@@ -47,6 +47,7 @@ def lanzar_trabajo(id_trabajo, argumentos):
 def registrar_trabajo(proceso, entrada):
     """Guarda el trabajo recién lanzado y muestra su ID."""
     global siguiente_id
+    duplicado = buscar_duplicado(entrada)
     trabajos[siguiente_id] = {
         "id": siguiente_id,
         "proceso": proceso,
@@ -57,8 +58,11 @@ def registrar_trabajo(proceso, entrada):
         "codigo": None,
         "cancelado": False,
     }
-    BITACORA.record(ev.JOB_STARTED, siguiente_id, pid=proceso.pid, comando=entrada)
+    extra = {} if duplicado is None else {"duplicado_de": duplicado}
+    BITACORA.record(ev.JOB_STARTED, siguiente_id, pid=proceso.pid, comando=entrada, **extra)
     print(f"ID: [{siguiente_id}]")
+    if duplicado is not None:
+        print(f"aviso: ya hay un trabajo activo con el mismo comando ([{duplicado}])")
     siguiente_id += 1
     guardar_trabajos()
     
@@ -76,6 +80,8 @@ def registrar_en_cola(comando, entrada):
     """Registra cualquier comando pendiente y lo agrega al final de la cola."""
     global siguiente_id
     id_trabajo = siguiente_id
+    duplicado = buscar_duplicado(entrada)
+    extra = {} if duplicado is None else {"duplicado_de": duplicado}
     ruta_out, ruta_err = rutas_salida(id_trabajo)
     CARPETA_SALIDAS.mkdir(parents=True, exist_ok=True)
     ruta_out.touch(exist_ok=True)
@@ -101,12 +107,14 @@ def registrar_en_cola(comando, entrada):
     }
     siguiente_id += 1
     guardar_trabajos()
-    BITACORA.record(ev.JOB_SUBMITTED, id_trabajo, comando=comando)
+    BITACORA.record(ev.JOB_SUBMITTED, id_trabajo, comando=comando, **extra)
 
     with condicion_cola:
         cola_ids.append(id_trabajo)
         condicion_cola.notify()
     print(f"ID: [{id_trabajo}] agregado a la cola")
+    if duplicado is not None:
+        print(f"aviso: ya hay un trabajo activo con el mismo comando ([{duplicado}])")
 
 
 def procesar_cola():
@@ -372,6 +380,27 @@ def actualizar_trabajo(trabajo):
             finalizar_trabajo(trabajo.get("id"), trabajo, codigo)
     return trabajo["estado"]
 
+def normalizar_comando(texto):
+    """Compara comandos sin importar espacios extra ni un & final."""
+    texto = texto.strip()
+    if texto.endswith("&"):
+        texto = texto[:-1]
+    return " ".join(texto.split())
+
+
+def buscar_duplicado(comando):
+    """Devuelve el ID de un trabajo activo con el mismo comando, o None."""
+    buscado = normalizar_comando(comando)
+    with bloqueo_trabajos:
+        for id_existente, existente in trabajos.items():
+            estado_trabajo(existente)  # refresca si ya terminó
+            if (
+                existente["fin"] is None
+                and existente["estado"] in ("En cola", "En ejecución")
+                and normalizar_comando(existente["comando"]) == buscado
+            ):
+                return id_existente
+    return None
 
 
 def estado_trabajo(trabajo):
