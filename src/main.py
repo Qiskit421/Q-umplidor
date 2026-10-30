@@ -1,11 +1,10 @@
+import json
+import os
+from pathlib import Path
+import shlex
 import subprocess
 import sys
 import time
-<<<<<<< Updated upstream
-
-siguiente_id = 1
-trabajos = {}
-=======
 import threading
 import atexit
 from collections import deque
@@ -93,6 +92,7 @@ def registrar_en_cola(comando, entrada):
         except ValueError:
             pass
     trabajos[id_trabajo] = {
+        "id": id_trabajo,
         "proceso": None, "comando": entrada, "argumentos_cola": comando,
         "inicio": None, "fin": None, "estado": "En cola", "codigo": None,
         "cancelado": False, "es_cola": True,
@@ -173,22 +173,7 @@ def procesar_cola():
             guardar_trabajos()
             BITACORA.record(ev.JOB_STARTED, id_trabajo, pid=proceso.pid, comando=comando)
             codigo = proceso.wait()
-            trabajo["proceso"] = None
-            trabajo["codigo"] = codigo
-            trabajo["fin"] = time.time()
-            if trabajo["cancelado"]:
-                trabajo["estado"] = "Cancelado"
-            elif codigo == 0:
-                trabajo["estado"] = "Terminado"
-            else:
-                trabajo["estado"] = f"Falló (código {codigo})"
-            guardar_trabajos()
-            BITACORA.record(
-                ev.JOB_CANCELLED if trabajo["cancelado"] else ev.JOB_FINISHED,
-                id_trabajo,
-                estado=trabajo["estado"],
-                exit_code=codigo,
-            )
+            finalizar_trabajo(id_trabajo, trabajo, codigo)
         finally:
             with condicion_cola:
                 id_cola_activo = None
@@ -255,7 +240,7 @@ def mostrar_archivo(id_trabajo, indice, comando, descripcion):
 
 
 bloqueo_guardado = threading.Lock()
-
+bloqueo_trabajos = threading.RLock()
 
 def _guardar_trabajos():
     """Guarda el historial y el siguiente ID sin escribir objetos Popen."""
@@ -307,6 +292,7 @@ def cargar_trabajos():
             if not isinstance(id_trabajo, int) or id_trabajo < 1 or id_trabajo in recuperados:
                 raise ValueError("ID inválido o repetido")
             recuperados[id_trabajo] = {
+                "id": id_trabajo,
                 "proceso": None,
                 "comando": registro["comando"],
                 "inicio": registro["inicio"],
@@ -349,6 +335,29 @@ for _id, _trabajo in trabajos.items():
     if _trabajo.get("es_cola") and _trabajo.get("estado") == "En cola":
         cola_ids.append(_id)
 
+def finalizar_trabajo(id_trabajo, trabajo, codigo):
+    """Cierra un trabajo una sola vez, aunque dos hilos lo detecten a la vez."""
+    with bloqueo_trabajos:
+        if trabajo["fin"] is not None:
+            return False  # otro hilo ya lo cerró
+        trabajo["proceso"] = None
+        trabajo["codigo"] = codigo
+        trabajo["fin"] = time.time()
+        if trabajo["cancelado"]:
+            trabajo["estado"] = "Cancelado"
+        elif codigo == 0:
+            trabajo["estado"] = "Terminado"
+        else:
+            trabajo["estado"] = f"Falló (código {codigo})"
+        guardar_trabajos()
+        BITACORA.record(
+            ev.JOB_CANCELLED if trabajo["cancelado"] else ev.JOB_FINISHED,
+            id_trabajo,
+            estado=trabajo["estado"],
+            exit_code=codigo,
+        )
+        return True
+
 
 def actualizar_trabajo(trabajo):
     """Registra el resultado cuando el proceso termina durante esta sesión."""
@@ -356,38 +365,24 @@ def actualizar_trabajo(trabajo):
     if proceso is not None:
         codigo = proceso.poll()
         if codigo is not None:
-            trabajo["proceso"] = None
-            trabajo["codigo"] = codigo
-            trabajo["fin"] = time.time()
-            if trabajo["cancelado"]:
-                trabajo["estado"] = "Cancelado"
-            elif codigo == 0:
-                trabajo["estado"] = "Terminado"
-            else:
-                trabajo["estado"] = f"Falló (código {codigo})"
-            guardar_trabajos()
-            if not trabajo.get("es_cola"):
-                BITACORA.record(
-                    ev.JOB_CANCELLED if trabajo["cancelado"] else ev.JOB_FINISHED,
-                    trabajo.get("id"),
-                    estado=trabajo["estado"],
-                    exit_code=codigo,
-                )
+            finalizar_trabajo(trabajo.get("id"), trabajo, codigo)
     return trabajo["estado"]
->>>>>>> Stashed changes
+
 
 
 def estado_trabajo(trabajo):
     """Devuelve el estado actual de un trabajo como texto."""
-    codigo = trabajo["proceso"].poll()  # None = sigue corriendo
+    return actualizar_trabajo(trabajo)
 
-    if codigo is None:
-        return "En ejecución"
-    if trabajo["cancelado"]:
-        return "Cancelado"
-    if codigo == 0:
-        return "Terminado"
-    return f"Falló (código {codigo})"
+
+def tiempo_trabajo(trabajo):
+    """Evita que el tiempo de un trabajo terminado siga aumentando."""
+    return int((trabajo["fin"] or time.time()) - trabajo["inicio"])
+
+
+def codigo_salida_shell(codigo):
+    """Presenta las terminaciones por señal como lo hace Bash en Linux."""
+    return 128 - codigo if os.name == "posix" and codigo < 0 else codigo
 
 
 def obtener_id(partes, comando):
@@ -412,6 +407,9 @@ def obtener_id(partes, comando):
     return id_trabajo
 
 
+hilo_cola = threading.Thread(target=procesar_cola, daemon=True)
+hilo_cola.start()
+
 while True:
     try:
         entrada = input("Q-umplidor> ").strip()
@@ -435,8 +433,6 @@ while True:
         print("  listar              Listar los trabajos registrados.")
         print("  codigo <id>         Consultar el código de salida.")
         print("  cancelar <id>       Cancelar un trabajo.")
-<<<<<<< Updated upstream
-=======
 
         print("\n-------------------- AVANCE 02 --------------------\n")
 
@@ -445,8 +441,25 @@ while True:
         print("  salida <id>         Mostrar la salida estándar (stdout).")
         print("  errores <id>        Mostrar la salida de error (stderr).")
         print("  eventos [id]        Consultar la bitácora de eventos.")
->>>>>>> Stashed changes
         print("  help                Mostrar esta ayuda.")
+
+    elif partes[0] == "queue":
+        if len(partes) == 1:
+            mostrar_cola()
+            continue
+
+        comando_cola = entrada.partition(" ")[2].strip()
+        if not comando_cola:
+            print("queue: debes indicar un comando después de queue")
+            continue
+        # Elimina un & final opcional para que cada trabajo termine antes de
+        # iniciar el siguiente y la cola conserve su ejecución secuencial.
+        if comando_cola.endswith("&"):
+            comando_cola = comando_cola[:-1].rstrip()
+        if not comando_cola:
+            print("queue: debes indicar un comando después de queue")
+            continue
+        registrar_en_cola(comando_cola, comando_cola)
 
     elif partes[0] == "sleep":
         if len(partes) == 1 or partes == ["sleep", "&"]:
@@ -476,29 +489,15 @@ while True:
         # Caso: sleep 10 &
         elif len(partes) == 3 and partes[2] == "&":
             try:
-
-                proceso = subprocess.Popen([
+                proceso = lanzar_trabajo(siguiente_id, [
                     sys.executable,
                     "-c",
                     f"import time; time.sleep({segundos})"
                 ])
-
-                # Guarda el trabajo
-                trabajos[siguiente_id] = {
-                    "proceso": proceso,
-                    "comando": entrada,
-                    "inicio": time.time(),
-                    "cancelado": False,
-                }
-
-                print(f"ID: [{siguiente_id}]")
-                siguiente_id += 1
-
+                registrar_trabajo(proceso, entrada)
             except (ValueError, OverflowError):
                 print("sleep: invalid time interval")
 
-<<<<<<< Updated upstream
-=======
     # Ejecutar un programa cualquiera en segundo plano
     elif partes[0] == "ejecutar":
         try:
@@ -526,14 +525,13 @@ while True:
             else:
                 mostrar_archivo(id_trabajo, 1, "errores", "la salida de error")
 
->>>>>>> Stashed changes
     # Consulta el estado de un trabajo
     elif partes[0] == "estado":
         id_trabajo = obtener_id(partes, "estado")
         if id_trabajo is not None:
             trabajo = trabajos[id_trabajo]
-            transcurrido = int(time.time() - trabajo["inicio"])
-            print(f"[{id_trabajo}] {trabajo['comando']} -> {estado_trabajo(trabajo)} ({transcurrido}s)")
+            estado = estado_trabajo(trabajo)
+            print(f"[{id_trabajo}] {trabajo['comando']} -> {estado} ({tiempo_trabajo(trabajo)}s)")
 
     # Listar los trabajos
     elif partes[0] == "listar":
@@ -545,9 +543,10 @@ while True:
         else:
             print(f"{'ID':<4} {'ESTADO':<20} {'TIEMPO':<8} COMANDO")
             for id_trabajo, trabajo in trabajos.items():
-                transcurrido = int(time.time() - trabajo["inicio"])
+                estado = estado_trabajo(trabajo)
+                transcurrido = tiempo_trabajo(trabajo)
                 print(
-                    f"{id_trabajo:<4} {estado_trabajo(trabajo):<20} "
+                    f"{id_trabajo:<4} {estado:<20} "
                     f"{transcurrido:<7}s {trabajo['comando']}"
                 )
 
@@ -564,11 +563,14 @@ while True:
                     print(f"codigo: no existe el trabajo [{id_trabajo}]")
                 else:
                     trabajo = trabajos[id_trabajo]
-                    codigo = trabajo["proceso"].poll()
-                    if codigo is None:
+                    estado = estado_trabajo(trabajo)
+                    codigo = trabajo["codigo"]
+                    if estado == "En ejecución":
                         print(f"codigo: el trabajo [{id_trabajo}] todavía está en ejecución, no tiene código de salida")
+                    elif codigo is None:
+                        print(f"codigo: no se conoce el código de salida del trabajo [{id_trabajo}] ({estado})")
                     else:
-                        print(f"codigo: el trabajo [{id_trabajo}] terminó con código de salida {codigo}")
+                        print(f"codigo: el trabajo [{id_trabajo}] terminó con código de salida {codigo_salida_shell(codigo)}")
             except ValueError:
                 print("codigo: el ID debe ser un número")
 
@@ -577,10 +579,11 @@ while True:
         id_trabajo = obtener_id(partes, "cancelar")
         if id_trabajo is not None:
             trabajo = trabajos[id_trabajo]
+            estado = estado_trabajo(trabajo)
             proceso = trabajo["proceso"]
 
-            if proceso.poll() is not None:
-                print(f"cancelar: el trabajo [{id_trabajo}] ya terminó ({estado_trabajo(trabajo)})")
+            if proceso is None:
+                print(f"cancelar: el trabajo [{id_trabajo}] ya terminó ({estado})")
             else:
                 trabajo["cancelado"] = True
                 BITACORA.record(ev.JOB_CANCEL_REQUESTED, id_trabajo)
@@ -590,6 +593,7 @@ while True:
                 except subprocess.TimeoutExpired:
                     proceso.kill()  # Envía SIGKILL si no respondió
                     proceso.wait()
+                estado_trabajo(trabajo)
                 print(f"Trabajo [{id_trabajo}] cancelado")
 
        # Consultar la bitácora de eventos
@@ -614,8 +618,6 @@ while True:
     # Manejar comandos inválidos sin terminar el servicio
     else:
         print(f"{partes[0]}: comando no reconocido")
-<<<<<<< Updated upstream
-=======
 
 
 # Al salir, evitar que se inicien más trabajos de la cola y terminar procesos activos.
@@ -640,4 +642,3 @@ for id_trabajo, trabajo in trabajos.items():
         BITACORA.record(ev.JOB_INTERRUPTED, id_trabajo, exit_code=proceso.returncode)
 guardar_trabajos()
 
->>>>>>> Stashed changes
