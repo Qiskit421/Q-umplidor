@@ -125,8 +125,11 @@ def procesar_cola():
             id_cola_activo = id_trabajo
 
         try:
-            trabajo["inicio"] = time.time()
-            trabajo["estado"] = "En ejecución"
+            with bloqueo_trabajos:
+                if trabajo["cancelado"]:
+                    continue  # lo cancelaron mientras esperaba su turno
+                trabajo["inicio"] = time.time()
+                trabajo["estado"] = "En ejecución"
             guardar_trabajos()
             # Los sleep de la cola se ejecutan con Python para que funcionen
             # tanto en Windows como en Linux/WSL. Los demás comandos usan el shell.
@@ -169,7 +172,10 @@ def procesar_cola():
                         stderr=errores,
                     )
 
-            trabajo["proceso"] = proceso
+            with bloqueo_trabajos:
+                trabajo["proceso"] = proceso
+                if trabajo["cancelado"]:
+                    proceso.terminate()  # lo cancelaron justo al iniciar
             guardar_trabajos()
             BITACORA.record(ev.JOB_STARTED, id_trabajo, pid=proceso.pid, comando=comando)
             codigo = proceso.wait()
@@ -343,19 +349,17 @@ def finalizar_trabajo(id_trabajo, trabajo, codigo):
         trabajo["proceso"] = None
         trabajo["codigo"] = codigo
         trabajo["fin"] = time.time()
-        if trabajo["cancelado"]:
+        if trabajo.get("interrumpido"):
+            trabajo["estado"] = "Interrumpido"
+            evento = ev.JOB_INTERRUPTED
+        elif trabajo["cancelado"]:
             trabajo["estado"] = "Cancelado"
-        elif codigo == 0:
-            trabajo["estado"] = "Terminado"
+            evento = ev.JOB_CANCELLED
         else:
-            trabajo["estado"] = f"Falló (código {codigo})"
+            trabajo["estado"] = "Terminado" if codigo == 0 else f"Falló (código {codigo})"
+            evento = ev.JOB_FINISHED
         guardar_trabajos()
-        BITACORA.record(
-            ev.JOB_CANCELLED if trabajo["cancelado"] else ev.JOB_FINISHED,
-            id_trabajo,
-            estado=trabajo["estado"],
-            exit_code=codigo,
-        )
+        BITACORA.record(evento, id_trabajo, estado=trabajo["estado"], exit_code=codigo)
         return True
 
 
@@ -377,6 +381,8 @@ def estado_trabajo(trabajo):
 
 def tiempo_trabajo(trabajo):
     """Evita que el tiempo de un trabajo terminado siga aumentando."""
+    if trabajo["inicio"] is None:
+        return 0  # nunca empezó (estaba en cola)
     return int((trabajo["fin"] or time.time()) - trabajo["inicio"])
 
 
@@ -574,25 +580,46 @@ while True:
             except ValueError:
                 print("codigo: el ID debe ser un número")
 
-    # Solicitud de cancelación
+# Solicitud de cancelación
     elif partes[0] == "cancelar":
         id_trabajo = obtener_id(partes, "cancelar")
         if id_trabajo is not None:
             trabajo = trabajos[id_trabajo]
-            estado = estado_trabajo(trabajo)
-            proceso = trabajo["proceso"]
-
-            if proceso is None:
-                print(f"cancelar: el trabajo [{id_trabajo}] ya terminó ({estado})")
-            else:
-                trabajo["cancelado"] = True
-                BITACORA.record(ev.JOB_CANCEL_REQUESTED, id_trabajo)
-                proceso.terminate()  # Envía SIGTERM
+            estado_trabajo(trabajo)  # refresca si el proceso ya terminó
+            a_terminar = None
+            with bloqueo_trabajos:
+                proceso = trabajo["proceso"]
+                if trabajo["fin"] is not None:
+                    # Ya terminó o ya estaba cancelado: repetir la petición no cambia nada
+                    if trabajo["estado"] == "Cancelado":
+                        print(f"cancelar: el trabajo [{id_trabajo}] ya estaba cancelado")
+                    else:
+                        print(f"cancelar: el trabajo [{id_trabajo}] ya terminó ({trabajo['estado']})")
+                elif trabajo["cancelado"]:
+                    print(f"cancelar: ya hay una cancelación en curso para el trabajo [{id_trabajo}]")
+                elif proceso is None and trabajo["estado"] == "En cola":
+                    # Nunca empezó: se cancela sin lanzar ningún proceso
+                    trabajo["cancelado"] = True
+                    trabajo["estado"] = "Cancelado"
+                    trabajo["fin"] = time.time()
+                    guardar_trabajos()
+                    BITACORA.record(ev.JOB_CANCEL_REQUESTED, id_trabajo)
+                    BITACORA.record(ev.JOB_CANCELLED, id_trabajo, estado="Cancelado", antes="En cola")
+                    print(f"Trabajo [{id_trabajo}] cancelado (estaba en cola)")
+                else:
+                    trabajo["cancelado"] = True
+                    BITACORA.record(ev.JOB_CANCEL_REQUESTED, id_trabajo)
+                    if proceso is None:
+                        print(f"Trabajo [{id_trabajo}] se está iniciando; se cancelará en cuanto arranque")
+                    else:
+                        a_terminar = proceso
+            if a_terminar is not None:
+                a_terminar.terminate()  # Envía SIGTERM
                 try:
-                    proceso.wait(timeout=2)
+                    a_terminar.wait(timeout=2)
                 except subprocess.TimeoutExpired:
-                    proceso.kill()  # Envía SIGKILL si no respondió
-                    proceso.wait()
+                    a_terminar.kill()  # Envía SIGKILL si no respondió
+                    a_terminar.wait()
                 estado_trabajo(trabajo)
                 print(f"Trabajo [{id_trabajo}] cancelado")
 
@@ -627,7 +654,10 @@ with condicion_cola:
 
 for id_trabajo, trabajo in trabajos.items():
     estado_trabajo(trabajo)
-    proceso = trabajo["proceso"]
+    with bloqueo_trabajos:
+        proceso = trabajo["proceso"]
+        if proceso is not None:
+            trabajo["interrumpido"] = True  # así lo cierra como interrumpido quien llegue primero
     if proceso is not None:
         proceso.terminate()
         try:
@@ -635,10 +665,5 @@ for id_trabajo, trabajo in trabajos.items():
         except subprocess.TimeoutExpired:
             proceso.kill()
             proceso.wait()
-        trabajo["proceso"] = None
-        trabajo["estado"] = "Interrumpido"
-        trabajo["codigo"] = proceso.returncode
-        trabajo["fin"] = time.time()
-        BITACORA.record(ev.JOB_INTERRUPTED, id_trabajo, exit_code=proceso.returncode)
+        finalizar_trabajo(id_trabajo, trabajo, proceso.returncode)
 guardar_trabajos()
-
