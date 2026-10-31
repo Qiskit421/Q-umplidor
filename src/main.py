@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import signal
 import subprocess
 import sys
 import time
@@ -10,9 +11,206 @@ import atexit
 from collections import deque
 import event_log as ev
 
+if os.name == "nt":
+    # Windows no tiene /proc ni grupos de procesos como Linux: se le pregunta
+    # directamente con las funciones de kernel32 (ctypes viene con Python).
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    INVALID_HANDLE_VALUE = wintypes.HANDLE(-1).value
+
+    class _LimiteBasico(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+            ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class _LimiteExtendido(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", _LimiteBasico), ("IoInfo", ctypes.c_uint64 * 6),
+            ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    class _Contabilidad(ctypes.Structure):
+        _fields_ = [
+            ("Tiempos", ctypes.c_int64 * 4), ("TotalPageFaultCount", wintypes.DWORD),
+            ("TotalProcesses", wintypes.DWORD), ("ActiveProcesses", wintypes.DWORD),
+            ("TotalTerminatedProcesses", wintypes.DWORD),
+        ]
+
+    kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.QueryInformationJobObject.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD, wintypes.LPDWORD]
+    kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+
+    class GrupoDeProcesos:
+        """Job Object de Windows con el proceso de un trabajo y todo lo que lance.
+
+        Se puede contar y terminar completo, y si Q-umplidor se cierra de golpe,
+        Windows termina el grupo solo (KILL_ON_JOB_CLOSE): no quedan huérfanos.
+        """
+
+        def __init__(self, proceso):
+            self._manejador = kernel32.CreateJobObjectW(None, None)
+            limites = _LimiteExtendido()
+            limites.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE
+            kernel32.SetInformationJobObject(self._manejador, 9, ctypes.byref(limites), ctypes.sizeof(limites))
+            kernel32.AssignProcessToJobObject(self._manejador, int(proceso._handle))
+
+        def activos(self):
+            """Cuántos procesos del grupo siguen vivos."""
+            info = _Contabilidad()
+            ok = self._manejador and kernel32.QueryInformationJobObject(
+                self._manejador, 1, ctypes.byref(info), ctypes.sizeof(info), None)
+            return info.ActiveProcesses if ok else 0
+
+        def terminar(self):
+            """Termina todos los procesos del grupo."""
+            if self._manejador:
+                kernel32.TerminateJobObject(self._manejador, 1)
+
+        def cerrar(self):
+            """Libera el manejador del grupo."""
+            if self._manejador:
+                kernel32.CloseHandle(self._manejador)
+                self._manejador = None
+
+    def termino_sin_recolectar(proceso):
+        """True si el proceso ya terminó pero Q-umplidor todavía no lo recolecta."""
+        return kernel32.WaitForSingleObject(int(proceso._handle), 0) == 0
+
+    def archivo_abierto(ruta):
+        """True si algún proceso tiene el archivo abierto.
+
+        Se intenta abrir en modo exclusivo: Windows lo impide (error 32) mientras
+        otro lo tenga abierto. El archivo no se modifica.
+        """
+        manejador = kernel32.CreateFileW(str(ruta), 0x80000000, 0, None, 3, 0, None)
+        if manejador == INVALID_HANDLE_VALUE:
+            return ctypes.get_last_error() == 32
+        kernel32.CloseHandle(manejador)
+        return False
+
+
+def procesos_linux(carpeta_datos):
+    """Lee de /proc los procesos: lista de (pid, ppid, estado, id de trabajo o None).
+
+    El id sale de la variable QUMPLIDOR_TRABAJO que heredan los procesos de cada
+    trabajo; solo cuenta si QUMPLIDOR_DATOS es esta misma carpeta de datos.
+    """
+    datos = f"QUMPLIDOR_DATOS={carpeta_datos}".encode()
+    encontrados = []
+    for carpeta in Path("/proc").iterdir():
+        if not carpeta.name.isdigit():
+            continue
+        try:
+            stat = (carpeta / "stat").read_text()
+        except OSError:
+            continue  # terminó mientras se revisaba
+        try:
+            variables = (carpeta / "environ").read_bytes().split(b"\0")
+        except OSError:
+            variables = []  # un zombi o un proceso de otro usuario no deja leerlas
+        # El nombre del programa va entre paréntesis y puede tener espacios.
+        campos = stat[stat.rfind(")") + 2:].split()
+        id_trabajo = None
+        if datos in variables:
+            for variable in variables:
+                if variable.startswith(b"QUMPLIDOR_TRABAJO="):
+                    id_trabajo = int(variable.split(b"=", 1)[1])
+        encontrados.append((int(carpeta.name), int(campos[1]), campos[0], id_trabajo))
+    return encontrados
+
+
+def archivos_abiertos_linux(carpeta):
+    """Nombres de los archivos dentro de carpeta que Q-umplidor tiene abiertos."""
+    abiertos = []
+    for descriptor in Path("/proc/self/fd").iterdir():
+        try:
+            destino = os.readlink(descriptor)
+        except OSError:
+            continue
+        if destino.startswith(str(carpeta)):
+            abiertos.append(Path(destino).name)
+    return abiertos
+
+
 ARCHIVO_TRABAJOS = Path(__file__).resolve().parent.parent / "data" / "trabajos.json"
 CARPETA_SALIDAS = ARCHIVO_TRABAJOS.parent / "salidas"
 BITACORA = ev.EventLog(ARCHIVO_TRABAJOS.parent / "events.jsonl")
+
+def opciones_hijo(id_trabajo):
+    """Opciones de Popen comunes a todos los trabajos.
+
+    Cada trabajo corre en su propio grupo de procesos. En Linux/WSL así la señal
+    de cancelar o salir llega también a los procesos que el trabajo haya lanzado
+    (por ejemplo, el sleep dentro de "queue sleep 100; echo hola"). En los dos
+    sistemas, un Ctrl+C en la consola ya no llega directo a los trabajos:
+    Q-umplidor los termina él mismo al salir.
+    Las variables QUMPLIDOR_* marcan a qué trabajo pertenece cada proceso, para
+    que el comando recursos pueda encontrarlos en Linux/WSL.
+    """
+    opciones = {
+        "env": {
+            **os.environ,
+            "QUMPLIDOR_TRABAJO": str(id_trabajo),
+            "QUMPLIDOR_DATOS": str(ARCHIVO_TRABAJOS.parent),
+        }
+    }
+    if os.name == "posix":
+        opciones["start_new_session"] = True
+    else:
+        opciones["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    return opciones
+
+
+def enviar_senal(proceso, forzar=False):
+    """Envía SIGTERM (o SIGKILL si forzar) al grupo completo del trabajo."""
+    if os.name == "posix":
+        try:
+            os.killpg(proceso.pid, signal.SIGKILL if forzar else signal.SIGTERM)
+        except ProcessLookupError:
+            pass  # el grupo ya no tiene procesos
+    else:
+        # En Windows no hay señales: se termina todo el grupo (Job Object) de golpe.
+        grupo = getattr(proceso, "grupo_windows", None)
+        if grupo is not None:
+            grupo.terminar()
+        proceso.terminate()
+
+
+def agrupar(proceso):
+    """En Windows mete al trabajo recién lanzado en su propio grupo de procesos."""
+    if os.name == "nt":
+        proceso.grupo_windows = GrupoDeProcesos(proceso)
+    return proceso
+
+
+def terminar_proceso(proceso):
+    """Termina el trabajo y todo su grupo, y recolecta al proceso hijo."""
+    enviar_senal(proceso)  # SIGTERM
+    try:
+        proceso.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        enviar_senal(proceso, forzar=True)  # SIGKILL si no respondió
+        proceso.wait()
+    # Si algún proceso del grupo ignoró SIGTERM y sigue vivo, no lo dejamos huérfano.
+    enviar_senal(proceso, forzar=True)
 
 
 def rutas_salida(id_trabajo):
@@ -31,12 +229,13 @@ def lanzar_trabajo(id_trabajo, argumentos):
     # suyos al salir del "with" para no dejar archivos abiertos.
     try:
         with ruta_out.open("wb") as salida, ruta_err.open("wb") as errores:
-            return subprocess.Popen(
+            return agrupar(subprocess.Popen(
                 argumentos,
                 stdin=subprocess.DEVNULL,
                 stdout=salida,
                 stderr=errores,
-            )
+                **opciones_hijo(id_trabajo),
+            ))
     except OSError:
         # Si el programa no existe, no dejamos archivos de un trabajo que nunca se registró.
         ruta_out.unlink(missing_ok=True)
@@ -82,10 +281,8 @@ def registrar_en_cola(comando, entrada):
     id_trabajo = siguiente_id
     duplicado = buscar_duplicado(entrada)
     extra = {} if duplicado is None else {"duplicado_de": duplicado}
-    ruta_out, ruta_err = rutas_salida(id_trabajo)
-    CARPETA_SALIDAS.mkdir(parents=True, exist_ok=True)
-    ruta_out.touch(exist_ok=True)
-    ruta_err.touch(exist_ok=True)
+    # Los archivos de salida se crean hasta que el trabajo arranca; si se cancela
+    # estando en cola no deja archivos vacíos.
     try:
         palabras = shlex.split(comando) if comando else []
     except ValueError:
@@ -169,6 +366,7 @@ def procesar_cola():
                         stdin=subprocess.DEVNULL,
                         stdout=salida,
                         stderr=errores,
+                        **opciones_hijo(id_trabajo),
                     )
                 else:
                     proceso = subprocess.Popen(
@@ -178,12 +376,17 @@ def procesar_cola():
                         stdin=subprocess.DEVNULL,
                         stdout=salida,
                         stderr=errores,
+                        **opciones_hijo(id_trabajo),
                     )
+                agrupar(proceso)
 
             with bloqueo_trabajos:
                 trabajo["proceso"] = proceso
-                if trabajo["cancelado"]:
-                    proceso.terminate()  # lo cancelaron justo al iniciar
+                if cola_cerrandose:
+                    trabajo["interrumpido"] = True  # el programa se está cerrando
+                detener_ya = trabajo["cancelado"] or cola_cerrandose
+            if detener_ya:
+                terminar_proceso(proceso)  # lo cancelaron justo al iniciar
             guardar_trabajos()
             BITACORA.record(ev.JOB_STARTED, id_trabajo, pid=proceso.pid, comando=comando)
             codigo = proceso.wait()
@@ -238,6 +441,28 @@ def mostrar_cola():
             f"{id_trabajo:<5} {'':<12} {str(ruta_out.relative_to(Path(__file__).resolve().parent.parent)):<36} "
             f"{codigo_texto:<9} {tiempo_texto:<20} {comando_mostrado}"
         )
+
+
+def limpiar_salidas_terminadas():
+    """queue clear: borra los .out/.err de los trabajos que ya terminaron.
+
+    Los trabajos en cola o en ejecución conservan sus archivos porque siguen en uso.
+    El historial (trabajos.json) no se modifica.
+    """
+    borrados = []
+    for id_trabajo, trabajo in list(trabajos.items()):
+        estado_trabajo(trabajo)  # refresca si acaba de terminar
+        if trabajo["fin"] is None:
+            continue
+        for ruta in rutas_salida(id_trabajo):
+            if ruta.exists():
+                ruta.unlink(missing_ok=True)
+                borrados.append(ruta.name)
+    if borrados:
+        BITACORA.record(ev.OUTPUT_FILES_CLEARED, archivos=sorted(borrados))
+        print(f"queue clear: se borraron {len(borrados)} archivos de salida de trabajos terminados")
+    else:
+        print("queue clear: no hay archivos de salida de trabajos terminados")
 
 
 def mostrar_archivo(id_trabajo, indice, comando, descripcion):
@@ -340,6 +565,35 @@ if any(trabajo["estado"] == "En ejecución" for trabajo in trabajos.values()):
             trabajo["fin"] = time.time()
     guardar_trabajos()
 
+
+def salidas_huerfanas():
+    """Archivos .out/.err que no pertenecen a ningún trabajo del historial."""
+    if not CARPETA_SALIDAS.exists():
+        return []
+    return [
+        ruta
+        for ruta in CARPETA_SALIDAS.iterdir()
+        if ruta.suffix in (".out", ".err")
+        and not (ruta.stem.isdigit() and int(ruta.stem) in trabajos)
+    ]
+
+
+def limpiar_salidas_huerfanas():
+    """Borra los .out/.err que no pertenecen a ningún trabajo del historial.
+
+    Pueden quedar si el programa se cerró de golpe entre crear los archivos y
+    guardar el trabajo, o si se borró trabajos.json.
+    """
+    ARCHIVO_TRABAJOS.with_suffix(".tmp").unlink(missing_ok=True)  # guardado interrumpido
+    borrados = []
+    for ruta in salidas_huerfanas():
+        ruta.unlink(missing_ok=True)
+        borrados.append(ruta.name)
+    if borrados:
+        BITACORA.record(ev.ORPHAN_FILES_REMOVED, archivos=sorted(borrados))
+
+
+limpiar_salidas_huerfanas()
 BITACORA.record(ev.SYSTEM_STARTED, trabajos_previos=len(trabajos))
 atexit.register(lambda: BITACORA.record(ev.SYSTEM_STOPPED))
 
@@ -354,6 +608,13 @@ def finalizar_trabajo(id_trabajo, trabajo, codigo):
     with bloqueo_trabajos:
         if trabajo["fin"] is not None:
             return False  # otro hilo ya lo cerró
+        if trabajo["proceso"] is not None:
+            # Si el trabajo dejó procesos en segundo plano (p. ej. "sleep 100 & echo hola"),
+            # se terminan con él para que no queden huérfanos.
+            enviar_senal(trabajo["proceso"], forzar=True)
+            # En Windows el grupo se conserva hasta confirmar que quedó vacío
+            # (lo cierra el recolector); así recursos puede revisarlo.
+            trabajo["grupo_windows"] = getattr(trabajo["proceso"], "grupo_windows", None)
         trabajo["proceso"] = None
         trabajo["codigo"] = codigo
         trabajo["fin"] = time.time()
@@ -420,6 +681,99 @@ def codigo_salida_shell(codigo):
     return 128 - codigo if os.name == "posix" and codigo < 0 else codigo
 
 
+def revisar_recursos_windows():
+    """Igual que revisar_recursos_linux, pero preguntando a Windows."""
+    vivos, zombis, huerfanos, abiertos = [], [], [], []
+    for id_trabajo, trabajo in list(trabajos.items()):
+        proceso = trabajo["proceso"]
+        if proceso is not None:
+            if termino_sin_recolectar(proceso):
+                zombis.append(id_trabajo)  # terminó y nadie lo ha recolectado
+            else:
+                grupo = getattr(proceso, "grupo_windows", None)
+                vivos += [id_trabajo] * (grupo.activos() if grupo else 1)
+        elif trabajo.get("grupo_windows") is not None:
+            huerfanos += [id_trabajo] * trabajo["grupo_windows"].activos()
+
+    # Archivos que Q-umplidor ya no debería tener abiertos nadie: historial,
+    # bitácora y salidas de trabajos que no están corriendo.
+    revisar = [ARCHIVO_TRABAJOS, ARCHIVO_TRABAJOS.with_suffix(".tmp"), ARCHIVO_TRABAJOS.parent / "events.jsonl"]
+    for id_trabajo, trabajo in list(trabajos.items()):
+        if trabajo["proceso"] is None:
+            revisar += list(rutas_salida(id_trabajo))
+    revisar += salidas_huerfanas()
+    for ruta in revisar:
+        if ruta.exists() and archivo_abierto(ruta):
+            abiertos.append(ruta.name)
+    return vivos, zombis, huerfanos, abiertos
+
+
+def revisar_recursos_linux():
+    """Lee de /proc qué procesos y archivos de Q-umplidor siguen en uso."""
+    por_pid = {
+        trabajo["proceso"].pid: id_trabajo
+        for id_trabajo, trabajo in list(trabajos.items())
+        if trabajo["proceso"] is not None
+    }
+    vivos, zombis, huerfanos = [], [], []
+    for pid, ppid, estado, id_trabajo in procesos_linux(ARCHIVO_TRABAJOS.parent):
+        if estado == "Z":
+            # Un zombi ya no tiene variables; se identifica por ser hijo de Q-umplidor.
+            if ppid == os.getpid():
+                zombis.append(por_pid.get(pid))
+            continue
+        if id_trabajo is None:
+            continue
+        trabajo = trabajos.get(id_trabajo)
+        if trabajo is not None and trabajo["fin"] is None:
+            vivos.append(id_trabajo)
+        else:
+            huerfanos.append(id_trabajo)  # su trabajo ya terminó y el proceso sigue vivo
+    abiertos = archivos_abiertos_linux(ARCHIVO_TRABAJOS.parent)
+    return vivos, zombis, huerfanos, abiertos
+
+
+def mostrar_recursos():
+    """Revisa en el sistema qué procesos y archivos de Q-umplidor siguen en uso.
+
+    No recolecta nada antes de revisar: si hay zombis, es porque el recolector
+    no hizo su trabajo, y deben verse.
+    """
+    if os.name == "nt":
+        vivos, zombis, huerfanos, abiertos = revisar_recursos_windows()
+    else:
+        vivos, zombis, huerfanos, abiertos = revisar_recursos_linux()
+    sin_trabajo = sorted(ruta.name for ruta in salidas_huerfanas())
+
+    def detalle_ids(ids):
+        ids = sorted({i for i in ids if i is not None})
+        return f"   (trabajos: {', '.join(f'[{i}]' for i in ids)})" if ids else ""
+
+    def detalle_archivos(nombres):
+        return f"   ({', '.join(sorted(nombres))})" if nombres else ""
+
+    # Cuántos trabajos hay detrás de los números, para que un 0 se lea como "0 de N".
+    por_estado = {}
+    for trabajo in list(trabajos.values()):
+        estado = trabajo["estado"]
+        grupo = "fallidos" if estado.startswith("Falló") else {
+            "En cola": "en cola", "En ejecución": "en ejecución", "Terminado": "terminados",
+            "Cancelado": "cancelados", "Interrumpido": "interrumpidos",
+        }.get(estado, estado)
+        por_estado[grupo] = por_estado.get(grupo, 0) + 1
+    if por_estado:
+        detalle = ", ".join(f"{grupo}: {cantidad}" for grupo, cantidad in por_estado.items())
+    else:
+        detalle = "todavía no se ha lanzado ninguno"
+
+    print(f"Trabajos revisados .......... {len(trabajos)}   ({detalle})")
+    print(f"Procesos hijos vivos ........ {len(vivos)}{detalle_ids(vivos)}")
+    print(f"Procesos zombi .............. {len(zombis)}{detalle_ids(zombis)}")
+    print(f"Procesos huérfanos .......... {len(huerfanos)}{detalle_ids(huerfanos)}")
+    print(f"Archivos abiertos ........... {len(abiertos)}{detalle_archivos(abiertos)}")
+    print(f"Archivos de salida huérfanos  {len(sin_trabajo)}{detalle_archivos(sin_trabajo)}")
+
+
 def obtener_id(partes, comando):
     """Valida que el comando traiga un ID válido y que exista. Devuelve el ID o None."""
     if len(partes) == 1:
@@ -444,6 +798,77 @@ def obtener_id(partes, comando):
 
 hilo_cola = threading.Thread(target=procesar_cola, daemon=True)
 hilo_cola.start()
+
+cerrando = threading.Event()
+
+
+def recolectar_terminados():
+    """Recoge cada medio segundo los trabajos que terminaron para que no queden zombis.
+
+    Sin esto, un hijo terminado sigue como <defunct> hasta que alguien consulta
+    su estado con estado, listar, codigo o cancelar.
+    """
+    while not cerrando.wait(0.5):
+        for trabajo in list(trabajos.values()):
+            if trabajo["proceso"] is not None:
+                actualizar_trabajo(trabajo)
+            grupo = trabajo.get("grupo_windows")
+            if trabajo["fin"] is not None and grupo is not None and grupo.activos() == 0:
+                grupo.cerrar()  # Windows: libera el grupo del trabajo ya terminado
+                trabajo["grupo_windows"] = None
+
+
+hilo_recolector = threading.Thread(target=recolectar_terminados, daemon=True)
+hilo_recolector.start()
+
+
+def liberar_recursos():
+    """Al salir, por la razón que sea, termina y recolecta todos los trabajos activos."""
+    global cola_cerrandose
+    if os.name == "posix":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)  # que otra señal no corte la limpieza
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    cerrando.set()
+    with condicion_cola:
+        cola_cerrandose = True  # la cola ya no inicia más trabajos
+        condicion_cola.notify_all()
+
+    def terminar_activos():
+        for id_trabajo, trabajo in list(trabajos.items()):
+            estado_trabajo(trabajo)
+            with bloqueo_trabajos:
+                proceso = trabajo["proceso"]
+                if proceso is not None:
+                    trabajo["interrumpido"] = True  # así lo cierra como interrumpido quien llegue primero
+            if proceso is not None:
+                terminar_proceso(proceso)
+                finalizar_trabajo(id_trabajo, trabajo, proceso.returncode)
+
+    terminar_activos()
+    # El hilo de la cola pudo estar lanzando un trabajo justo ahora: se espera a
+    # que termine y se revisa otra vez para que ningún proceso quede vivo.
+    hilo_cola.join(timeout=3)
+    terminar_activos()
+    for trabajo in list(trabajos.values()):
+        if trabajo.get("grupo_windows") is not None:
+            trabajo["grupo_windows"].cerrar()
+            trabajo["grupo_windows"] = None
+    guardar_trabajos()
+
+
+# atexit corre los registros en orden inverso: primero se liberan los recursos
+# y al final se registra SYSTEM_STOPPED en la bitácora.
+atexit.register(liberar_recursos)
+
+
+def cerrar_por_senal(numero, _marco):
+    """SIGTERM (kill) y SIGHUP (cerrar la terminal) cierran el programa de forma ordenada."""
+    sys.exit(128 + numero)  # sys.exit hace que se ejecute liberar_recursos
+
+
+if os.name == "posix":
+    signal.signal(signal.SIGTERM, cerrar_por_senal)
+    signal.signal(signal.SIGHUP, cerrar_por_senal)
 
 while True:
     try:
@@ -473,14 +898,20 @@ while True:
 
         print("  queue <comando>     Ejecutar echo, sleep (&) o un programa en cola.")
         print("  queue               Mostrar la cola de trabajos.")
+        print("  queue clear         Borrar los archivos de salida de trabajos terminados.")
         print("  salida <id>         Mostrar la salida estándar (stdout).")
         print("  errores <id>        Mostrar la salida de error (stderr).")
         print("  eventos [id]        Consultar la bitácora de eventos.")
+        print("  recursos            Revisar procesos y archivos que siguen en uso.")
         print("  help                Mostrar esta ayuda.")
 
     elif partes[0] == "queue":
         if len(partes) == 1:
             mostrar_cola()
+            continue
+        # Sin esto, "queue clear" se encolaría como el comando de bash "clear".
+        if len(partes) == 2 and partes[1] == "clear":
+            limpiar_salidas_terminadas()
             continue
 
         comando_cola = entrada.partition(" ")[2].strip()
@@ -632,6 +1063,8 @@ while True:
                     trabajo["estado"] = "Cancelado"
                     trabajo["fin"] = time.time()
                     guardar_trabajos()
+                    for ruta in rutas_salida(id_trabajo):
+                        ruta.unlink(missing_ok=True)  # nunca corrió: no conserva archivos
                     BITACORA.record(ev.JOB_CANCEL_REQUESTED, id_trabajo)
                     BITACORA.record(ev.JOB_CANCELLED, id_trabajo, estado="Cancelado", antes="En cola")
                     print(f"Trabajo [{id_trabajo}] cancelado (estaba en cola)")
@@ -643,12 +1076,7 @@ while True:
                     else:
                         a_terminar = proceso
             if a_terminar is not None:
-                a_terminar.terminate()  # Envía SIGTERM
-                try:
-                    a_terminar.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    a_terminar.kill()  # Envía SIGKILL si no respondió
-                    a_terminar.wait()
+                terminar_proceso(a_terminar)  # SIGTERM al grupo; SIGKILL si no responde
                 estado_trabajo(trabajo)
                 print(f"Trabajo [{id_trabajo}] cancelado")
 
@@ -671,28 +1099,15 @@ while True:
             for registro in registros:
                 print(ev.format_entry(registro))
 
+    # Revisar procesos y archivos que siguen en uso
+    elif partes[0] == "recursos":
+        if len(partes) != 1:
+            print("recursos: no acepta argumentos. Uso: recursos")
+            continue
+        mostrar_recursos()
+
     # Manejar comandos inválidos sin terminar el servicio
     else:
         print(f"{partes[0]}: comando no reconocido")
 
-
-# Al salir, evitar que se inicien más trabajos de la cola y terminar procesos activos.
-with condicion_cola:
-    cola_cerrandose = True
-    condicion_cola.notify_all()
-
-for id_trabajo, trabajo in trabajos.items():
-    estado_trabajo(trabajo)
-    with bloqueo_trabajos:
-        proceso = trabajo["proceso"]
-        if proceso is not None:
-            trabajo["interrumpido"] = True  # así lo cierra como interrumpido quien llegue primero
-    if proceso is not None:
-        proceso.terminate()
-        try:
-            proceso.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            proceso.kill()
-            proceso.wait()
-        finalizar_trabajo(id_trabajo, trabajo, proceso.returncode)
-guardar_trabajos()
+# Al salir del ciclo, atexit ejecuta liberar_recursos().
