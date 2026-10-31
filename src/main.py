@@ -8,6 +8,11 @@ import time
 import threading
 from collections import deque
 
+# Parte de Ruy (Avance 02): RF-05, RF-06 y RF-30
+import concurrencia
+import escalamiento
+import estados
+
 ARCHIVO_TRABAJOS = Path(__file__).resolve().parent.parent / "data" / "trabajos.json"
 CARPETA_SALIDAS = ARCHIVO_TRABAJOS.parent / "salidas"
 
@@ -33,65 +38,8 @@ def lanzar_trabajo(id_trabajo, argumentos):
                 stdin=subprocess.DEVNULL,
                 stdout=salida,
                 stderr=errores,
-            )
-    except OSError:
-        # Si el programa no existe, no dejamos archivos de un trabajo que nunca se registró.
-        ruta_out.unlink(missing_ok=True)
-        ruta_err.unlink(missing_ok=True)
-        raise
-
-
-def registrar_trabajo(proceso, entrada):
-    """Guarda el trabajo recién lanzado y muestra su ID."""
-    global siguiente_id
-    trabajos[siguiente_id] = {
-        "proceso": proceso,
-        "comando": entrada,
-        "inicio": time.time(),
-        "fin": None,
-        "estado": "En ejecución",
-        "codigo": None,
-        "cancelado": False,
-    }
-    print(f"ID: [{siguiente_id}]")
-    siguiente_id += 1
-    guardar_trabajos()
-
-
-def mostrar_archivo(id_trabajo, indice, comando, descripcion):
-    """Muestra el contenido de stdout (indice 0) o stderr (indice 1) de un trabajo."""
-    ruta = rutas_salida(id_trabajo)[indice]
-    if not ruta.exists():
-        print(f"{comando}: el trabajo [{id_trabajo}] no tiene {descripcion} registrada")
-        return
-    contenido = ruta.read_text(encoding="utf-8", errors="replace")
-    if contenido:
-        print(contenido, end="" if contenido.endswith("\n") else "\n")
-    else:
-        print(f"{comando}: el trabajo [{id_trabajo}] no ha escrito nada en {descripcion}")
-
-
-def rutas_salida(id_trabajo):
-    """Cada trabajo tiene dos archivos: uno para stdout y otro para stderr."""
-    return (
-        CARPETA_SALIDAS / f"{id_trabajo}.out",
-        CARPETA_SALIDAS / f"{id_trabajo}.err",
-    )
-
-
-def lanzar_trabajo(id_trabajo, argumentos):
-    """Lanza el proceso hijo con stdout y stderr redirigidos a archivos separados."""
-    CARPETA_SALIDAS.mkdir(parents=True, exist_ok=True)
-    ruta_out, ruta_err = rutas_salida(id_trabajo)
-    # El hijo recibe su propia copia de los descriptores. El padre cierra los
-    # suyos al salir del "with" para no dejar archivos abiertos.
-    try:
-        with ruta_out.open("wb") as salida, ruta_err.open("wb") as errores:
-            return subprocess.Popen(
-                argumentos,
-                stdin=subprocess.DEVNULL,
-                stdout=salida,
-                stderr=errores,
+                # Grupo propio para que el escalamiento alcance a sus hijos (RF-30).
+                start_new_session=True,
             )
     except OSError:
         # Si el programa no existe, no dejamos archivos de un trabajo que nunca se registró.
@@ -122,7 +70,7 @@ def registrar_trabajo(proceso, entrada):
 cola_ids = deque()
 condicion_cola = threading.Condition()
 cola_cerrandose = False
-id_cola_activo = None
+ids_arrancando = set()  # trabajos de la cola que ya ocupan lugar pero aún no tienen proceso
 
 
 def registrar_en_cola(comando, entrada):
@@ -159,82 +107,119 @@ def registrar_en_cola(comando, entrada):
     print(f"ID: [{id_trabajo}] agregado a la cola")
 
 
-def procesar_cola():
-    """Ejecuta los comandos de queue de uno en uno, respetando el orden."""
-    global id_cola_activo
+def contar_activos():
+    """Trabajos que ocupan lugar: procesos vivos + los que la cola está arrancando (RF-05)."""
+    vivos = sum(
+        1 for trabajo in list(trabajos.values())
+        if trabajo.get("proceso") is not None and trabajo["proceso"].poll() is None
+    )
+    return vivos + len(ids_arrancando)
+
+
+def registrar_terminados():
+    """Anota la hora de fin real de los trabajos con "&" que ya terminaron (RF-06).
+
+    Sin esto, el fin se registraba hasta que alguien usaba estado o listar, y
+    el tiempo de ejecución salía más largo de lo real. Los trabajos de la cola
+    no se revisan aquí porque su propio hilo ya espera a que terminen.
+    """
+    for trabajo in list(trabajos.values()):
+        if not trabajo.get("es_cola") and trabajo.get("proceso") is not None:
+            actualizar_trabajo(trabajo)
+
+
+def despachar_cola():
+    """Saca trabajos de la cola en orden de llegada mientras haya lugar (RF-05).
+
+    Antes la cola corría un solo trabajo a la vez. Ahora arranca tantos como
+    permita el límite de concurrencia; cada uno corre en su propio hilo, que
+    solo espera a que su proceso termine.
+    """
     while True:
         with condicion_cola:
-            while not cola_ids and not cola_cerrandose:
-                condicion_cola.wait()
-            if cola_cerrandose:
-                return
+            while True:
+                if cola_cerrandose:
+                    return
+                registrar_terminados()
+                if cola_ids and control_concurrencia.hay_espacio():
+                    break
+                # El timeout hace que se revise de nuevo aunque nadie avise, por
+                # ejemplo cuando termina un trabajo lanzado con "&".
+                condicion_cola.wait(timeout=0.2)
             id_trabajo = cola_ids.popleft()
             trabajo = trabajos.get(id_trabajo)
             if trabajo is None or trabajo.get("cancelado"):
                 continue
-            id_cola_activo = id_trabajo
+            # Ocupa su lugar desde ya, antes de que exista el proceso.
+            ids_arrancando.add(id_trabajo)
+        threading.Thread(target=ejecutar_de_cola, args=(id_trabajo, trabajo), daemon=True).start()
 
+
+def ejecutar_de_cola(id_trabajo, trabajo):
+    """Ejecuta un trabajo de la cola y registra su resultado."""
+    try:
+        trabajo["inicio"] = time.time()
+        trabajo["estado"] = "En ejecución"
+        guardar_trabajos()
+        # Los sleep de la cola se ejecutan con Python para que funcionen
+        # tanto en Windows como en Linux/WSL. Los demás comandos usan el shell.
+        CARPETA_SALIDAS.mkdir(parents=True, exist_ok=True)
+        ruta_out, ruta_err = rutas_salida(id_trabajo)
+        comando = trabajo["argumentos_cola"]
         try:
-            trabajo["inicio"] = time.time()
-            trabajo["estado"] = "En ejecución"
-            guardar_trabajos()
-            # Los sleep de la cola se ejecutan con Python para que funcionen
-            # tanto en Windows como en Linux/WSL. Los demás comandos usan el shell.
-            CARPETA_SALIDAS.mkdir(parents=True, exist_ok=True)
-            ruta_out, ruta_err = rutas_salida(id_trabajo)
-            comando = trabajo["argumentos_cola"]
+            palabras = shlex.split(comando)
+        except ValueError:
+            palabras = []
+
+        argumentos_sleep = None
+        if len(palabras) == 2 and palabras[0] == "sleep":
             try:
-                palabras = shlex.split(comando)
+                segundos_sleep = int(palabras[1])
+                if segundos_sleep >= 0:
+                    argumentos_sleep = [
+                        sys.executable,
+                        "-c",
+                        f"import time; time.sleep({segundos_sleep})",
+                    ]
             except ValueError:
-                palabras = []
+                pass
 
-            argumentos_sleep = None
-            if len(palabras) == 2 and palabras[0] == "sleep":
-                try:
-                    segundos_sleep = int(palabras[1])
-                    if segundos_sleep >= 0:
-                        argumentos_sleep = [
-                            sys.executable,
-                            "-c",
-                            f"import time; time.sleep({segundos_sleep})",
-                        ]
-                except ValueError:
-                    pass
-
-            with ruta_out.open("wb") as salida, ruta_err.open("wb") as errores:
-                if argumentos_sleep is not None:
-                    proceso = subprocess.Popen(
-                        argumentos_sleep,
-                        stdin=subprocess.DEVNULL,
-                        stdout=salida,
-                        stderr=errores,
-                    )
-                else:
-                    proceso = subprocess.Popen(
-                        comando,
-                        shell=True,
-                        executable="/bin/bash" if os.name == "posix" else None,
-                        stdin=subprocess.DEVNULL,
-                        stdout=salida,
-                        stderr=errores,
-                    )
-
-            trabajo["proceso"] = proceso
-            guardar_trabajos()
-            codigo = proceso.wait()
-            trabajo["proceso"] = None
-            trabajo["codigo"] = codigo
-            trabajo["fin"] = time.time()
-            if trabajo["cancelado"]:
-                trabajo["estado"] = "Cancelado"
-            elif codigo == 0:
-                trabajo["estado"] = "Terminado"
+        with ruta_out.open("wb") as salida, ruta_err.open("wb") as errores:
+            if argumentos_sleep is not None:
+                proceso = subprocess.Popen(
+                    argumentos_sleep,
+                    stdin=subprocess.DEVNULL,
+                    stdout=salida,
+                    stderr=errores,
+                    start_new_session=True,  # RF-30: grupo propio
+                )
             else:
-                trabajo["estado"] = f"Falló (código {codigo})"
-            guardar_trabajos()
-        finally:
-            with condicion_cola:
-                id_cola_activo = None
+                proceso = subprocess.Popen(
+                    comando,
+                    shell=True,
+                    executable="/bin/bash" if os.name == "posix" else None,
+                    stdin=subprocess.DEVNULL,
+                    stdout=salida,
+                    stderr=errores,
+                    start_new_session=True,  # RF-30: grupo propio
+                )
+
+        with condicion_cola:
+            trabajo["proceso"] = proceso
+            ids_arrancando.discard(id_trabajo)  # ya cuenta como proceso vivo
+        guardar_trabajos()
+        codigo = proceso.wait()
+        if cola_cerrandose:
+            return  # Q-umplidor se está cerrando: el cierre lo marca como Interrumpido.
+        trabajo["proceso"] = None
+        trabajo["codigo"] = codigo
+        trabajo["fin"] = time.time()
+        trabajo["estado"] = estados.estado_final(trabajo, codigo)
+        guardar_trabajos()
+    finally:
+        with condicion_cola:
+            ids_arrancando.discard(id_trabajo)
+            condicion_cola.notify_all()  # se liberó un lugar
 
 
 def mostrar_cola():
@@ -279,7 +264,7 @@ def mostrar_cola():
         if trabajo.get("es_cola") and comando_mostrado.startswith("queue "):
             comando_mostrado = comando_mostrado[len("queue "):]
         print(
-            f"{id_trabajo:<5} {'':<12} {str(ruta_out.relative_to(Path(__file__).resolve().parent.parent)):<36} "
+            f"{id_trabajo:<5} {estados.estado_cliente(trabajo['estado']):<12} {str(ruta_out.relative_to(Path(__file__).resolve().parent.parent)):<36} "
             f"{codigo_texto:<9} {tiempo_texto:<20} {comando_mostrado}"
         )
 
@@ -317,8 +302,12 @@ def _guardar_trabajos():
                 "segundos_solicitados": trabajo.get("segundos_solicitados"),
                 "momento_encolado": trabajo.get("momento_encolado"),
                 "argumentos_cola": trabajo.get("argumentos_cola"),
+                "motivo_fin": trabajo.get("motivo_fin"),
+                "senal_final": trabajo.get("senal_final"),
             }
-            for id_trabajo, trabajo in trabajos.items()
+            # list(): con varios trabajos de la cola, otro hilo puede agregar
+            # un trabajo mientras se guarda.
+            for id_trabajo, trabajo in list(trabajos.items())
         ],
     }
     temporal = ARCHIVO_TRABAJOS.with_suffix(".tmp")
@@ -360,6 +349,8 @@ def cargar_trabajos():
                 "es_cola": registro.get("es_cola", False),
                 "segundos_solicitados": registro.get("segundos_solicitados"),
                 "momento_encolado": registro.get("momento_encolado"),
+                "motivo_fin": registro.get("motivo_fin"),
+                "senal_final": registro.get("senal_final"),
                 "argumentos_cola": (
                     " ".join(registro.get("argumentos_cola", []))
                     if isinstance(registro.get("argumentos_cola"), list)
@@ -399,12 +390,7 @@ def actualizar_trabajo(trabajo):
             trabajo["proceso"] = None
             trabajo["codigo"] = codigo
             trabajo["fin"] = time.time()
-            if trabajo["cancelado"]:
-                trabajo["estado"] = "Cancelado"
-            elif codigo == 0:
-                trabajo["estado"] = "Terminado"
-            else:
-                trabajo["estado"] = f"Falló (código {codigo})"
+            trabajo["estado"] = estados.estado_final(trabajo, codigo)
             guardar_trabajos()
     return trabajo["estado"]
 
@@ -446,10 +432,60 @@ def obtener_id(partes, comando):
     return id_trabajo
 
 
-hilo_cola = threading.Thread(target=procesar_cola, daemon=True)
+def lanzar_o_encolar(argumentos, texto_cola, entrada):
+    """Trabajos con "&": arrancan ya si hay lugar; si no, esperan en la cola (RF-05).
+
+    Se revisa y se lanza bajo el mismo candado que usa el despachador, para que
+    los dos no ocupen el último lugar al mismo tiempo.
+    """
+    with condicion_cola:
+        if control_concurrencia.hay_espacio():
+            proceso = lanzar_trabajo(siguiente_id, argumentos)
+            registrar_trabajo(proceso, entrada)
+            return
+    print(
+        f"Límite de concurrencia alcanzado ({control_concurrencia.limite}); "
+        "se envía a la cola (QUEUED) hasta que se libere un lugar."
+    )
+    registrar_en_cola(texto_cola, entrada)
+
+
+def trabajos_en_ejecucion():
+    return [
+        (id_trabajo, trabajo)
+        for id_trabajo, trabajo in list(trabajos.items())
+        if trabajo.get("proceso") is not None and trabajo["proceso"].poll() is None
+    ]
+
+
+def al_detener_por_tiempo(id_trabajo, trabajo, senal):
+    estado_trabajo(trabajo)
+    detalle = "forzado con SIGKILL" if senal == "SIGKILL" else "terminó con SIGTERM"
+    print(f"\n[aviso] Trabajo [{id_trabajo}] superó el tiempo máximo y se detuvo ({detalle})")
+
+
+control_concurrencia = concurrencia.ControlConcurrencia(
+    concurrencia.leer_limite_concurrencia(), contar_activos
+)
+politica = escalamiento.leer_politica()
+
+
+def avisar_despachador():
+    with condicion_cola:
+        condicion_cola.notify_all()
+
+
+hilo_cola = threading.Thread(target=despachar_cola, daemon=True)
 hilo_cola.start()
+escalamiento.iniciar_vigilante(
+    politica, trabajos_en_ejecucion, al_detener_por_tiempo, lambda: cola_cerrandose
+)
+escalamiento.instalar_cierre_por_senal()
+escalamiento.registrar_red_de_seguridad(trabajos_en_ejecucion, politica)
 
 while True:
+    if escalamiento.cierre_solicitado():
+        break  # SIGTERM/SIGHUP llegó mientras se atendía un comando
     try:
         entrada = input("Q-umplidor> ").strip()
     except (KeyboardInterrupt, EOFError):
@@ -479,7 +515,19 @@ while True:
         print("  queue               Mostrar la cola de trabajos.")
         print("  salida <id>         Mostrar la salida estándar (stdout).")
         print("  errores <id>        Mostrar la salida de error (stderr).")
+        print("  limite              Ver el límite de concurrencia.")
+        print("  limite <N>          Cambiar el límite de concurrencia.")
+        print("  politica            Ver la política de escalamiento (SIGTERM -> SIGKILL).")
         print("  help                Mostrar esta ayuda.")
+
+    elif partes[0] == "limite":
+        concurrencia.atender_comando_limite(partes, control_concurrencia, avisar_despachador)
+
+    elif partes[0] == "politica":
+        if len(partes) != 1:
+            print("politica: no acepta argumentos. Uso: politica")
+            continue
+        escalamiento.mostrar_politica(politica)
 
     elif partes[0] == "queue":
         if len(partes) == 1:
@@ -527,12 +575,11 @@ while True:
         # Caso: sleep 10 &
         elif len(partes) == 3 and partes[2] == "&":
             try:
-                proceso = lanzar_trabajo(siguiente_id, [
-                    sys.executable,
-                    "-c",
-                    f"import time; time.sleep({segundos})"
-                ])
-                registrar_trabajo(proceso, entrada)
+                lanzar_o_encolar(
+                    [sys.executable, "-c", f"import time; time.sleep({segundos})"],
+                    f"sleep {segundos}",
+                    entrada,
+                )
             except (ValueError, OverflowError):
                 print("sleep: invalid time interval")
 
@@ -547,11 +594,10 @@ while True:
             print("ejecutar: uso: ejecutar <programa> [argumentos] &")
             continue
         try:
-            proceso = lanzar_trabajo(siguiente_id, argumentos[:-1])
+            lanzar_o_encolar(argumentos[:-1], shlex.join(argumentos[:-1]), entrada)
         except OSError as error:
             print(f"ejecutar: no se pudo iniciar '{argumentos[0]}': {error.strerror}")
             continue
-        registrar_trabajo(proceso, entrada)
 
     # Mostrar stdout o stderr de un trabajo
     elif partes[0] in ("salida", "errores"):
@@ -568,7 +614,8 @@ while True:
         if id_trabajo is not None:
             trabajo = trabajos[id_trabajo]
             estado = estado_trabajo(trabajo)
-            print(f"[{id_trabajo}] {trabajo['comando']} -> {estado} ({tiempo_trabajo(trabajo)}s)")
+            for linea in estados.detalle_estado(id_trabajo, trabajo, estado):
+                print(linea)
 
     # Listar los trabajos
     elif partes[0] == "listar":
@@ -578,14 +625,10 @@ while True:
         if not trabajos:
             print("No hay trabajos registrados")
         else:
-            print(f"{'ID':<4} {'ESTADO':<20} {'TIEMPO':<8} COMANDO")
-            for id_trabajo, trabajo in trabajos.items():
+            print(estados.ENCABEZADO_LISTAR)
+            for id_trabajo, trabajo in list(trabajos.items()):
                 estado = estado_trabajo(trabajo)
-                transcurrido = tiempo_trabajo(trabajo)
-                print(
-                    f"{id_trabajo:<4} {estado:<20} "
-                    f"{transcurrido:<7}s {trabajo['comando']}"
-                )
+                print(estados.fila_listar(id_trabajo, trabajo, estado))
 
     # Obtener el código de salida de un trabajo
     elif partes[0] == "codigo":
@@ -619,18 +662,19 @@ while True:
             estado = estado_trabajo(trabajo)
             proceso = trabajo["proceso"]
 
-            if proceso is None:
+            if proceso is None and id_trabajo in ids_arrancando:
+                print(f"cancelar: el trabajo [{id_trabajo}] está arrancando, intenta de nuevo en un momento")
+            elif proceso is None:
                 print(f"cancelar: el trabajo [{id_trabajo}] ya terminó ({estado})")
             else:
-                trabajo["cancelado"] = True
-                proceso.terminate()  # Envía SIGTERM
-                try:
-                    proceso.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    proceso.kill()  # Envía SIGKILL si no respondió
-                    proceso.wait()
+                # Política de escalamiento (RF-30): SIGTERM -> gracia -> SIGKILL.
+                senal = escalamiento.detener_trabajo(trabajo, politica)
                 estado_trabajo(trabajo)
-                print(f"Trabajo [{id_trabajo}] cancelado")
+                if senal == "SIGKILL":
+                    print(f"Trabajo [{id_trabajo}] cancelado (no respondió a SIGTERM en "
+                          f"{politica.gracia:g}s, se forzó con SIGKILL)")
+                else:
+                    print(f"Trabajo [{id_trabajo}] cancelado")
 
     # Manejar comandos inválidos sin terminar el servicio 
     else:
@@ -646,12 +690,11 @@ for trabajo in trabajos.values():
     estado_trabajo(trabajo)
     proceso = trabajo["proceso"]
     if proceso is not None:
-        proceso.terminate()
-        try:
-            proceso.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            proceso.kill()
-            proceso.wait()
+        # Misma política de escalamiento que al cancelar (RF-30).
+        senal = escalamiento.terminar_con_escalamiento(proceso, politica.gracia)
+        if senal is not None:
+            trabajo["senal_final"] = senal
+            trabajo["motivo_fin"] = estados.MOTIVO_CIERRE
         trabajo["proceso"] = None
         trabajo["estado"] = "Interrumpido"
         trabajo["codigo"] = proceso.returncode
