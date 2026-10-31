@@ -21,6 +21,9 @@ La columna **Decisión** marca cuál de los tres fue cada uso.
 | IA-005 | 10/02/2026 | Misael | ChatGPT | `casos-de-prueba.md`, `matriz-trazabilidad.md` | Ejemplos de casos de prueba y matriz de trazabilidad | Aceptado |
 | IA-006 | 25/10/2026 | Oscar | Claude AI | `src/main.py` | Captura separada de stdout y stderr (RF-11) | Modificado |
 | IA-007 | 25/10/2026 | Oscar | Claude AI | `docs/technical-guide/Arquitectura.md`, `docs/user-guide/guia-de-usuario.md` | Actualizar las guías técnica y de usuario al código real | Aceptado |
-| IA-008 | | | | | | Rechazado |
+| IA-008 | 25/10/2026 | Oscar | Claude AI | — (comando de terminal, no se integró) | Consultar desde la terminal el estado y los issues ligados del PR #129 | Rechazado |
+| IA-009 | 28/10/2026 | Oscar | Claude AI | `src/main.py`, `verif/scripts/prueba_cola.sh` | Cancelación en cola (RF-10) y rechazo con cola llena (RF-25) sobre la cola del PR #130 | Modificado |
+| IA-010 | 28/10/2026 | Oscar | Claude AI | `docs/incidents/INC-001.md`, guías | Redactar el incidente INC-001 y actualizar las guías con la cola | Aceptado |
+| IA-011 | 29/10/2026 | Oscar | Claude AI | `src/main.py`, `verif/scripts/prueba_cola.sh` | Alias `queue cancelar <id>` | Aceptado |
 
 > Para agregar una entrada: añade la fila aquí y su sección en `detalle-uso-ia.md` con el mismo ID.

@@ -1,0 +1,11 @@
+Q-umplidor> ID: [1] agregado a la cola
+Q-umplidor> ID: [2] agregado a la cola
+Q-umplidor> ID: [3] agregado a la cola
+Q-umplidor> queue: cola llena (2/2 en espera), trabajo rechazado. Intenta de nuevo cuando avance la cola.
+Q-umplidor> ID: [4] agregado a la cola
+Q-umplidor> ID   ESTADO               TIEMPO   COMANDO
+1    Terminado            3      s sleep 3
+2    Terminado            1      s sleep 1
+3    Terminado            1      s sleep 1
+4    Terminado            0      s echo ya hay lugar
+Q-umplidor> 
