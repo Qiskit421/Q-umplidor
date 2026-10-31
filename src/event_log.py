@@ -13,6 +13,8 @@ JOB_CANCEL_REQUESTED = "JOB_CANCEL_REQUESTED"  # el usuario pidió cancelar
 JOB_CANCELLED = "JOB_CANCELLED"                # cancelación efectiva
 JOB_REJECTED = "JOB_REJECTED"                  # comando inválido o sin recursos
 JOB_INTERRUPTED = "JOB_INTERRUPTED"            # el sistema se cerró con el trabajo corriendo
+ORPHAN_FILES_REMOVED = "ORPHAN_FILES_REMOVED"  # .out/.err sin trabajo borrados al arrancar
+OUTPUT_FILES_CLEARED = "OUTPUT_FILES_CLEARED"  # queue clear borró salidas de trabajos terminados
 
 class EventLog:
     def __init__(self, path="events.jsonl"):
