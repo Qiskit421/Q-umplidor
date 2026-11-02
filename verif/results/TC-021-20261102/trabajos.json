@@ -1,0 +1,58 @@
+{
+  "siguiente_id": 4,
+  "trabajos": [
+    {
+      "id": 1,
+      "comando": "sleep 2 &",
+      "inicio": 1793599427.5555546,
+      "fin": 1793599429.7583218,
+      "estado": "Terminado",
+      "codigo": 0,
+      "es_cola": false,
+      "segundos_solicitados": null,
+      "momento_encolado": null,
+      "argumentos_cola": null,
+      "motivo_fin": null,
+      "senal_final": null,
+      "huella": {
+        "pid": 698,
+        "inicio_proceso": 28124,
+        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+      }
+    },
+    {
+      "id": 2,
+      "comando": "ejecutar bash -c 'exit 3' &",
+      "inicio": 1793599429.7593832,
+      "fin": 1793599429.7661834,
+      "estado": "Falló (código 3)",
+      "codigo": 3,
+      "es_cola": true,
+      "segundos_solicitados": 0,
+      "momento_encolado": 1793599427.7553613,
+      "argumentos_cola": "bash -c 'exit 3'",
+      "motivo_fin": null,
+      "senal_final": null,
+      "huella": {
+        "pid": 700,
+        "inicio_proceso": 28345,
+        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+      }
+    },
+    {
+      "id": 3,
+      "comando": "sleep 30",
+      "inicio": null,
+      "fin": 1793599428.3554797,
+      "estado": "Cancelado",
+      "codigo": null,
+      "es_cola": true,
+      "segundos_solicitados": 30,
+      "momento_encolado": 1793599427.9550602,
+      "argumentos_cola": "sleep 30",
+      "motivo_fin": null,
+      "senal_final": null,
+      "huella": null
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+>>> sleep 2 &
+ID: [1]
+>>> ejecutar bash -c 'exit 3' &
+Límite de concurrencia alcanzado (1); se envía a la cola (QUEUED) hasta que se libere un lugar.
+ID: [2] agregado a la cola
+>>> queue sleep 30
+ID: [3] agregado a la cola
+>>> listar
+ID   ESTADO      ENVIADO   INICIO    FIN       ESPERA   EJECUCIÓN  COMANDO
+1    RUNNING     00:03:47  00:03:47  -         0s       0s         sleep 2 &
+2    QUEUED      00:03:47  -         -         0s       -          ejecutar bash -c 'exit 3' &
+3    QUEUED      00:03:47  -         -         0s       -          sleep 30
+>>> cancelar 3
+Trabajo [3] cancelado (estaba en cola, no llegó a ejecutarse)
+>>> listar
+ID   ESTADO      ENVIADO   INICIO    FIN       ESPERA   EJECUCIÓN  COMANDO
+1    SUCCEEDED   00:03:47  00:03:47  00:03:49  0s       2s         sleep 2 &
+2    FAILED      00:03:47  00:03:49  00:03:49  2s       0s         ejecutar bash -c 'exit 3' &
+3    CANCELED    00:03:47  -         00:03:48  0s       -          sleep 30
+>>> estado 2
+[2] ejecutar bash -c 'exit 3' & -> FAILED (Falló (código 3))
+  Enviado:   2026-11-02 00:03:47
+  Inicio:    2026-11-02 00:03:49
+  Fin:       2026-11-02 00:03:49
+  Espera:    2s
+  Ejecución: 0s
+>>> codigo 2
+codigo: el trabajo [2] terminó con código de salida 3
+

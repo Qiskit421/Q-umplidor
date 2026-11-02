@@ -1,0 +1,28 @@
+>>> limite
+Límite de concurrencia: 2 (ocupados ahora: 0)
+>>> sleep 2 &
+ID: [1]
+>>> sleep 2 &
+ID: [2]
+>>> sleep 2 &
+Límite de concurrencia alcanzado (2); se envía a la cola (QUEUED) hasta que se libere un lugar.
+ID: [3] agregado a la cola
+>>> queue sleep 2
+ID: [4] agregado a la cola
+>>> ejecutar echo hola &
+Límite de concurrencia alcanzado (2); se envía a la cola (QUEUED) hasta que se libere un lugar.
+ID: [5] agregado a la cola
+>>> listar
+ID   ESTADO      ENVIADO   INICIO    FIN       ESPERA   EJECUCIÓN  COMANDO
+1    SUCCEEDED   00:03:38  00:03:38  00:03:40  0s       2s         sleep 2 &
+2    SUCCEEDED   00:03:38  00:03:38  00:03:40  0s       2s         sleep 2 &
+3    SUCCEEDED   00:03:38  00:03:40  00:03:42  2s       2s         sleep 2 &
+4    SUCCEEDED   00:03:38  00:03:40  00:03:42  1s       2s         sleep 2
+5    SUCCEEDED   00:03:39  00:03:42  00:03:42  3s       0s         ejecutar echo hola &
+>>> limite 3
+Límite de concurrencia: 2 -> 3
+>>> limite 0
+limite: el límite debe ser un entero mayor o igual a 1
+>>> limite x
+limite: el límite debe ser un entero mayor o igual a 1
+

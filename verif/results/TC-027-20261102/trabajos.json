@@ -1,0 +1,54 @@
+{
+  "siguiente_id": 4,
+  "trabajos": [
+    {
+      "id": 1,
+      "comando": "sleep 30 &",
+      "inicio": 1793599457.9409056,
+      "fin": 1793599459.2489116,
+      "estado": "Interrumpido",
+      "codigo": -15,
+      "es_cola": false,
+      "segundos_solicitados": null,
+      "momento_encolado": null,
+      "argumentos_cola": null,
+      "motivo_fin": "cierre de Q-umplidor",
+      "senal_final": "SIGTERM",
+      "huella": {
+        "pid": 782,
+        "inicio_proceso": 31163,
+        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+      }
+    },
+    {
+      "id": 2,
+      "comando": "sleep 30 &",
+      "inicio": null,
+      "fin": null,
+      "estado": "En cola",
+      "codigo": null,
+      "es_cola": true,
+      "segundos_solicitados": 30,
+      "momento_encolado": 1793599458.1413476,
+      "argumentos_cola": "sleep 30",
+      "motivo_fin": null,
+      "senal_final": null,
+      "huella": null
+    },
+    {
+      "id": 3,
+      "comando": "sleep 30",
+      "inicio": null,
+      "fin": null,
+      "estado": "En cola",
+      "codigo": null,
+      "es_cola": true,
+      "segundos_solicitados": 30,
+      "momento_encolado": 1793599458.3403902,
+      "argumentos_cola": "sleep 30",
+      "motivo_fin": null,
+      "senal_final": null,
+      "huella": null
+    }
+  ]
+}

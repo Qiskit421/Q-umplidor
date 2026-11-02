@@ -1,0 +1,17 @@
+>>> sleep 30 &
+ID: [1]
+>>> sleep 30 &
+Límite de concurrencia alcanzado (1); se envía a la cola (QUEUED) hasta que se libere un lugar.
+ID: [2] agregado a la cola
+>>> queue sleep 30
+ID: [3] agregado a la cola
+>>> queue sleep 30
+queue: cola llena (2/2 en espera), trabajo rechazado. Intenta de nuevo cuando avance la cola.
+>>> sleep 30 &
+queue: cola llena (2/2 en espera), trabajo rechazado. Intenta de nuevo cuando avance la cola.
+>>> listar
+ID   ESTADO      ENVIADO   INICIO    FIN       ESPERA   EJECUCIÓN  COMANDO
+1    RUNNING     00:04:17  00:04:17  -         0s       1s         sleep 30 &
+2    QUEUED      00:04:18  -         -         0s       -          sleep 30 &
+3    QUEUED      00:04:18  -         -         0s       -          sleep 30
+

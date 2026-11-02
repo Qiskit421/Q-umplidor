@@ -1,0 +1,8 @@
+PASS  Sin procesos zombi hijos de Q-umplidor (al terminar)
+PASS  Q-umplidor no deja archivos de data/ abiertos (al terminar)
+PASS  Sin zombis aunque nadie consultó el trabajo
+PASS  Matado con SIGKILL -> FAILED, código 137
+PASS  Matado con SIGTERM -> FAILED, código 143
+PASS  No se reportan como CANCELED (nadie pidió cancelar)
+
+RESULTADO TC-024: PASS

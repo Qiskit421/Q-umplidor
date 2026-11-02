@@ -1,0 +1,13 @@
+>>> sleep 600 &
+ID: [1]
+>>> ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &
+ID: [2]
+### kill -TERM 763
+
+
+>>> sleep 600 &
+ID: [1]
+>>> ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &
+ID: [2]
+### kill -HUP 770
+
