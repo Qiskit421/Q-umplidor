@@ -10,3 +10,18 @@
 | MT-08 | Manejar comandos inválidos sin terminar el servicio. | `src/main.py`: manejo de comandos no reconocidos. | Cumple | [CP-008](../test-cases/casos-de-prueba.md#cp-008--manejar-un-comando-inválido) | Al introducir `hola`, aparece `hola: comando no reconocido` y el programa continúa esperando nuevos comandos sin finalizar el servicio. |
 
 CRL + SHIFT + V
+
+## Avance 02 — Concurrencia, estados, escalamiento y recuperación (Ruy)
+
+Estado según la ejecución de `verif/scripts/prueba_avance02_ruy.py`. La evidencia está en `verif/results/TC-02x-<fecha>/`.
+
+| ID | Requisito | Ubicación en el código | Estado | Caso de prueba | Observaciones |
+|---|---|---|---|---|---|
+| MT-020 | RF-05 Límite configurable de concurrencia | `src/concurrencia.py`; `main.py`: `despachar_cola`, `lanzar_o_encolar`, `contar_activos` | Cumple | [TC-020](../test-cases/casos-de-prueba.md#tc-020--límite-de-concurrencia-rf-05) | Máximo observado con `ps` = límite; FIFO; `limite N` en caliente. [ADR-0004](../../docs/decisions/ADR-0004.md) |
+| MT-021 | RF-06 Estados y tiempos | `src/estados.py`; `main.py`: `registrar_terminados` | Cumple | [TC-021](../test-cases/casos-de-prueba.md#tc-021--estados-y-tiempos-coherentes-rf-06) | Nombres del cliente; envío ≤ inicio ≤ fin; espera y ejecución separadas |
+| MT-022 | RF-30 / RF-10 Escalamiento al cancelar | `src/escalamiento.py`: `terminar_con_escalamiento`, `detener_trabajo` | Cumple | [TC-022](../test-cases/casos-de-prueba.md#tc-022--escalamiento-sigterm--sigkill-sin-huérfanos-rf-30-rf-10) | SIGTERM → gracia → SIGKILL al grupo; sin huérfanos. [ADR-0007](../../docs/decisions/ADR-0007.md) |
+| MT-023 | RF-30 Trabajos que no terminan | `src/escalamiento.py`: `iniciar_vigilante` | Cumple | [TC-023](../test-cases/casos-de-prueba.md#tc-023--tiempo-máximo-por-trabajo-rf-30) | `Q_TIEMPO_MAXIMO`; queda `FAILED (tiempo máximo excedido)` |
+| MT-024 | Robustez: hijo terminado desde fuera; liberación de procesos | `main.py`: `registrar_terminados`, `ejecutar_de_cola` | Cumple | [TC-024](../test-cases/casos-de-prueba.md#tc-024--proceso-hijo-terminado-desde-fuera-robustez) | Sin zombis sin consultar; `FAILED` 137/143 |
+| MT-025 | RF-12 / RF-13 / RNF-10 Recuperación tras caída | `src/recuperacion.py`; `main.py`: arranque | Cumple | [TC-025](../test-cases/casos-de-prueba.md#tc-025--caída-abrupta-kill--9-y-recuperación-rf-12-rf-13-rnf-10) | Huérfanos detenidos al reiniciar; cola retomada. [ADR-0006](../../docs/decisions/ADR-0006.md), [INC-002](../../docs/incidents/INC-002.md) |
+| MT-026 | RF-13 Cierre ordenado por señal | `src/escalamiento.py`: `instalar_cierre_por_senal`, `registrar_red_de_seguridad` | Cumple | [TC-026](../test-cases/casos-de-prueba.md#tc-026--cierre-por-sigterm--sighup-sin-huérfanos-rf-13) | SIGTERM y SIGHUP sin huérfanos. [INC-002](../../docs/incidents/INC-002.md) |
+| MT-027 | RF-25 / RNF-29 Saturación con el límite lleno | `main.py`: `lanzar_o_encolar` + `registrar_en_cola` (Oscar) | Cumple | [TC-027](../test-cases/casos-de-prueba.md#tc-027--saturación-de-la-cola-con-el-límite-lleno-rf-25-rf-05-rnf-29) | Rechazo explícito, sin mensaje contradictorio ni ID consumido |

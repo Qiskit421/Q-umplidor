@@ -12,6 +12,7 @@ from collections import deque
 import concurrencia
 import escalamiento
 import estados
+import recuperacion
 
 ARCHIVO_TRABAJOS = Path(__file__).resolve().parent.parent / "data" / "trabajos.json"
 CARPETA_SALIDAS = ARCHIVO_TRABAJOS.parent / "salidas"
@@ -59,11 +60,28 @@ def registrar_trabajo(proceso, entrada):
         "estado": "En ejecución",
         "codigo": None,
         "cancelado": False,
+        # Para reconocer el proceso si Q-umplidor se cae (ADR-0006).
+        "huella": recuperacion.huella_proceso(proceso.pid),
     }
     print(f"ID: [{siguiente_id}]")
     siguiente_id += 1
     guardar_trabajos()
 
+
+# Capacidad máxima de trabajos esperando en la cola (RF-25). Se configura con la
+# variable de entorno Q_CAPACIDAD_COLA, por ejemplo: Q_CAPACIDAD_COLA=3 python3 src/main.py
+def leer_capacidad_cola():
+    valor = os.environ.get("Q_CAPACIDAD_COLA", "5")
+    try:
+        capacidad = int(valor)
+        if capacidad < 1:
+            raise ValueError
+    except ValueError:
+        raise SystemExit(f"Q_CAPACIDAD_COLA debe ser un entero mayor o igual a 1 (se recibió '{valor}')")
+    return capacidad
+
+
+CAPACIDAD_COLA = leer_capacidad_cola()
 
 # Cola exclusiva para comandos "queue sleep N".
 # Se reutilizan lanzar_trabajo() y rutas_salida() para capturar stdout/stderr.
@@ -76,6 +94,13 @@ ids_arrancando = set()  # trabajos de la cola que ya ocupan lugar pero aún no t
 def registrar_en_cola(comando, entrada):
     """Registra cualquier comando pendiente y lo agrega al final de la cola."""
     global siguiente_id
+    with condicion_cola:
+        en_espera = len(cola_ids)
+    if en_espera >= CAPACIDAD_COLA:
+        # Rechazo explícito (RF-25, RNF-29): no se registra, no consume ID y no bloquea.
+        print(f"queue: cola llena ({en_espera}/{CAPACIDAD_COLA} en espera), trabajo rechazado. "
+              "Intenta de nuevo cuando avance la cola.")
+        return
     id_trabajo = siguiente_id
     ruta_out, ruta_err = rutas_salida(id_trabajo)
     CARPETA_SALIDAS.mkdir(parents=True, exist_ok=True)
@@ -206,6 +231,7 @@ def ejecutar_de_cola(id_trabajo, trabajo):
 
         with condicion_cola:
             trabajo["proceso"] = proceso
+            trabajo["huella"] = recuperacion.huella_proceso(proceso.pid)  # ADR-0006
             ids_arrancando.discard(id_trabajo)  # ya cuenta como proceso vivo
         guardar_trabajos()
         codigo = proceso.wait()
@@ -304,6 +330,7 @@ def _guardar_trabajos():
                 "argumentos_cola": trabajo.get("argumentos_cola"),
                 "motivo_fin": trabajo.get("motivo_fin"),
                 "senal_final": trabajo.get("senal_final"),
+                "huella": trabajo.get("huella"),
             }
             # list(): con varios trabajos de la cola, otro hilo puede agregar
             # un trabajo mientras se guarda.
@@ -351,6 +378,7 @@ def cargar_trabajos():
                 "momento_encolado": registro.get("momento_encolado"),
                 "motivo_fin": registro.get("motivo_fin"),
                 "senal_final": registro.get("senal_final"),
+                "huella": registro.get("huella"),
                 "argumentos_cola": (
                     " ".join(registro.get("argumentos_cola", []))
                     if isinstance(registro.get("argumentos_cola"), list)
@@ -368,10 +396,10 @@ def cargar_trabajos():
 
 trabajos, siguiente_id = cargar_trabajos()
 if any(trabajo["estado"] == "En ejecución" for trabajo in trabajos.values()):
-    for trabajo in trabajos.values():
-        if trabajo["estado"] == "En ejecución":
-            trabajo["estado"] = "Interrumpido"
-            trabajo["fin"] = time.time()
+    # Si la sesión anterior se cayó (kill -9), sus trabajos pueden seguir vivos:
+    # se detienen antes de marcarlos Interrumpido (ADR-0006).
+    for mensaje in recuperacion.recuperar_trabajos(trabajos, escalamiento.leer_politica().gracia):
+        print(mensaje)
     guardar_trabajos()
 
 
@@ -402,6 +430,8 @@ def estado_trabajo(trabajo):
 
 def tiempo_trabajo(trabajo):
     """Evita que el tiempo de un trabajo terminado siga aumentando."""
+    if trabajo["inicio"] is None:
+        return 0  # Todavía en cola, o cancelado antes de arrancar.
     return int((trabajo["fin"] or time.time()) - trabajo["inicio"])
 
 
@@ -443,6 +473,12 @@ def lanzar_o_encolar(argumentos, texto_cola, entrada):
             proceso = lanzar_trabajo(siguiente_id, argumentos)
             registrar_trabajo(proceso, entrada)
             return
+        cola_llena = len(cola_ids) >= CAPACIDAD_COLA
+    if cola_llena:
+        # registrar_en_cola() lo rechaza con su mensaje (RF-25); no se anuncia
+        # que "se envía a la cola" si de todos modos se va a rechazar.
+        registrar_en_cola(texto_cola, entrada)
+        return
     print(
         f"Límite de concurrencia alcanzado ({control_concurrencia.limite}); "
         "se envía a la cola (QUEUED) hasta que se libere un lugar."
@@ -497,6 +533,11 @@ while True:
     if len(partes) == 0:
         continue
 
+    # "queue cancelar <id>" es un alias de "cancelar <id>". Sin esto, queue lo
+    # formaría como un comando de bash llamado "cancelar" y no cancelaría nada.
+    if len(partes) >= 2 and partes[0] == "queue" and partes[1] == "cancelar":
+        partes = partes[1:]
+
     if partes[0] == "help":
         if len(partes) != 1:
             print("help: no acepta argumentos. Uso: help")
@@ -507,12 +548,13 @@ while True:
         print("  estado <id>         Consultar el estado de un trabajo.")
         print("  listar              Listar los trabajos registrados.")
         print("  codigo <id>         Consultar el código de salida.")
-        print("  cancelar <id>       Cancelar un trabajo.")
+        print("  cancelar <id>       Cancelar un trabajo en ejecución o en cola.")
 
         print("\n-------------------- AVANCE 02 --------------------\n")
 
         print("  queue <comando>     Ejecutar echo, sleep (&) o un programa en cola.")
         print("  queue               Mostrar la cola de trabajos.")
+        print("  queue cancelar <id> Igual que cancelar <id>.")
         print("  salida <id>         Mostrar la salida estándar (stdout).")
         print("  errores <id>        Mostrar la salida de error (stderr).")
         print("  limite              Ver el límite de concurrencia.")
@@ -659,6 +701,21 @@ while True:
         id_trabajo = obtener_id(partes, "cancelar")
         if id_trabajo is not None:
             trabajo = trabajos[id_trabajo]
+
+            # Trabajo en cola: se retira bajo el mismo candado que usa el hilo de la
+            # cola, así nunca se cancela y se arranca al mismo tiempo (RF-10).
+            with condicion_cola:
+                en_cola = id_trabajo in cola_ids
+                if en_cola:
+                    cola_ids.remove(id_trabajo)
+                    trabajo["cancelado"] = True
+                    trabajo["estado"] = "Cancelado"
+                    trabajo["fin"] = time.time()
+            if en_cola:
+                guardar_trabajos()
+                print(f"Trabajo [{id_trabajo}] cancelado (estaba en cola, no llegó a ejecutarse)")
+                continue
+
             estado = estado_trabajo(trabajo)
             proceso = trabajo["proceso"]
 

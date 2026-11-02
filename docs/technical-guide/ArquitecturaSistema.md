@@ -41,10 +41,12 @@ flowchart TD
         C["concurrencia.py<br/>RF-05"]
         E["estados.py<br/>RF-06"]
         X["escalamiento.py<br/>RF-30"]
+        R["recuperacion.py<br/>RF-13"]
     end
     M --> C
     M --> E
     M --> X
+    M --> R
     X --> E
 ```
 
@@ -54,6 +56,7 @@ flowchart TD
 | `concurrencia.py` | Leer, validar y cambiar el límite; decidir si hay lugar | `leer_limite_concurrencia`, `ControlConcurrencia.hay_espacio`, `atender_comando_limite` |
 | `estados.py` | Estados del cliente, regla del estado final, tiempos y presentación | `estado_cliente`, `estado_final`, `tiempo_espera`, `tiempo_ejecucion`, `detalle_estado`, `fila_listar` |
 | `escalamiento.py` | Detener trabajos (SIGTERM → gracia → SIGKILL), tiempo máximo, cierre por señal | `terminar_con_escalamiento`, `detener_trabajo`, `iniciar_vigilante`, `instalar_cierre_por_senal` |
+| `recuperacion.py` | Reconocer y detener al arrancar los trabajos que quedaron vivos tras una caída | `huella_proceso`, `sigue_vivo`, `detener_huerfano`, `recuperar_trabajos` |
 
 **Regla de dependencias:** `main.py` usa a los otros tres; ellos no conocen a `main.py`. Lo que necesitan del estado global (contar trabajos activos, listar los que están corriendo) lo reciben como funciones. Así cada módulo se puede leer y probar por separado.
 
@@ -105,7 +108,7 @@ stateDiagram-v2
     [*] --> QUEUED: enviado sin lugar
     [*] --> RUNNING: enviado con lugar
     QUEUED --> RUNNING: el despachador lo arranca
-    QUEUED --> CANCELED: cancelar (rama Oscar-cola)
+    QUEUED --> CANCELED: cancelar
     RUNNING --> SUCCEEDED: código 0
     RUNNING --> FAILED: código ≠ 0
     RUNNING --> FAILED: supera Q_TIEMPO_MAXIMO
@@ -160,7 +163,7 @@ data/
     └── <id>.err         # stderr del trabajo
 ```
 
-Campos por trabajo: `id`, `comando`, `inicio`, `fin`, `estado`, `codigo`, `es_cola`, `segundos_solicitados`, `momento_encolado`, `argumentos_cola`, `motivo_fin`, `senal_final`.
+Campos por trabajo: `id`, `comando`, `inicio`, `fin`, `estado`, `codigo`, `es_cola`, `segundos_solicitados`, `momento_encolado`, `argumentos_cola`, `motivo_fin`, `senal_final`, `huella` (pid, inicio del proceso, `boot_id`).
 
 ### 3.7 Configuración
 
@@ -169,7 +172,7 @@ Campos por trabajo: `id`, `comando`, `inicio`, `fin`, `estado`, `codigo`, `es_co
 | `Q_LIMITE_CONCURRENCIA` | 2 | Trabajos en `RUNNING` a la vez (también con `limite N`) | 0004 |
 | `Q_GRACIA_SIGTERM` | 2 s | Espera entre SIGTERM y SIGKILL | 0007 |
 | `Q_TIEMPO_MAXIMO` | 0 (sin límite) | Tiempo máximo en `RUNNING` | 0007 |
-| `Q_CAPACIDAD_COLA` | 5 | Trabajos esperando en la cola (rama `Oscar-cola`) | — |
+| `Q_CAPACIDAD_COLA` | 5 | Trabajos esperando en la cola (Oscar) | — |
 
 Un valor inválido detiene el arranque con un mensaje claro.
 
@@ -193,9 +196,9 @@ Un valor inválido detiene el arranque con un mensaje claro.
 | RF-04 Ejecución sin bloquear | Procesos con `Popen`, hilos ejecutores | 0004 |
 | RF-05 Límite de concurrencia | `concurrencia.py`, `contar_activos`, `lanzar_o_encolar` | 0004 |
 | RF-06 Estados y tiempos | `estados.py`, `registrar_terminados` | 0004, 0005 |
-| RF-10 Cancelación | `escalamiento.detener_trabajo` (+ cola en rama `Oscar-cola`) | 0007 |
+| RF-10 Cancelación | `escalamiento.detener_trabajo` (+ cancelación en cola, Oscar) | 0007 |
 | RF-11 stdout/stderr separados | `lanzar_trabajo`, `data/salidas/` | 0005 |
-| RF-12 / RF-13 Persistencia y recuperación | `guardar_trabajos`, `cargar_trabajos` | 0005, 0006 |
+| RF-12 / RF-13 Persistencia y recuperación | `guardar_trabajos`, `cargar_trabajos`, `recuperacion.py` | 0005, 0006 |
 | RF-30 Escalamiento | `escalamiento.py` | 0007 |
 
 ## 4. Arquitectura objetivo (producto final)
@@ -247,15 +250,14 @@ flowchart TD
 | Protocolo de red | ¿Socket TCP con mensajes JSON por línea, o HTTP? ¿Qué operaciones y qué formato de error? |
 | Acceso LAN/VPN | ¿En qué interfaz escucha? ¿Cómo se rechazan conexiones de fuera de la red privada? |
 | Autenticación | ¿Token compartido o usuario/contraseña? ¿Cómo se guarda el secreto? |
-| Saturación | Qué pasa cuando se llena la cola (RF-25, rama `Oscar-cola`) o llegan muchas conexiones. |
+| Saturación | Qué pasa cuando se llena la cola (RF-25, ya implementado) o llegan muchas conexiones. |
 | Solicitudes duplicadas | RF-26 (rama `Marlene`). |
-| Huérfanos tras SIGKILL al servicio | Guardar PID + hora de inicio y limpiar al reiniciar (ADR-0006). |
 
 ## 5. Estado de integración
 
 | Rama | Contenido | Relación con esta arquitectura |
 |---|---|---|
 | `main` | Base del Avance 01 + cola + persistencia | Base de este documento |
-| `Ruy` | RF-05, RF-06, RF-30 + ADR-0004 a ADR-0007 | Descrita aquí como "actual" |
-| `Oscar-cola` | Cancelar en cola, capacidad de cola, alias `queue cancelar` | Combinada con `Ruy`, tiene 1 conflicto de una línea en `cancelar`: se conserva `id_trabajo in ids_arrancando`. Probada en conjunto. |
+| `Oscar-cola` | Cancelar en cola, capacidad de cola, alias `queue cancelar` | Integrada en `main` (PR #133) |
+| `Ruy` | RF-05, RF-06, RF-30, recuperación de huérfanos (INC-002), ADR-0004 a ADR-0007, TC-020..027 | Actualizada con `main`. Descrita aquí como "actual". |
 | `Marlene` | Bitácora de eventos, duplicados | Ya choca con `main` sin contar `Ruy`. Su `finalizar_trabajo` debe usar `estados.estado_final()`. |

@@ -100,7 +100,9 @@ def main():
     sesion.enviar("listar")
 
     time.sleep(3.2)
-    sesion.enviar("codigo 1")
+    # El trabajo 1 se canceló arriba (su código es 143, por SIGTERM); el que
+    # termina normal es el 2 ("sleep 1 &"), que debe informar código 0.
+    sesion.enviar("codigo 2")
     sesion.enviar("listar")
 
     salida = sesion.cerrar()
@@ -173,17 +175,17 @@ def main():
 
     # ===================== 7. Obtener su código de salida =====================
     informa_en_ejecucion = "todavía está en ejecución" in salida
-    informa_codigo_final = "terminó con código de salida 0" in salida
+    informa_codigo_final = "el trabajo [2] terminó con código de salida 0" in salida
     if informa_en_ejecucion and informa_codigo_final:
         registrar(
             "7. Obtener su código de salida",
             "PASS",
-            "'codigo 1' informó primero que seguía en ejecución y después el código final (0)",
+            "'codigo' informó primero que seguía en ejecución y después el código final (0)",
         )
     elif informa_codigo_final:
-        registrar("7. Obtener su código de salida", "PASS", "'codigo 1' informó el código de salida final (0)")
+        registrar("7. Obtener su código de salida", "PASS", "'codigo 2' informó el código de salida final (0)")
     else:
-        registrar("7. Obtener su código de salida", "FAIL", "'codigo 1' no informó el código de salida esperado")
+        registrar("7. Obtener su código de salida", "FAIL", "'codigo 2' no informó el código de salida 0 del trabajo que terminó normal")
 
     # ===================== 8. Manejar comandos inválidos sin terminar el servicio =====================
     responde_invalido = "comando_invalido_de_prueba: comando no reconocido" in salida

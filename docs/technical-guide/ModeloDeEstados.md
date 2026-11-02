@@ -1,77 +1,93 @@
-# Modelo preliminar de estados de un trabajo
+# Modelo de estados de un trabajo
 
-> **Estado del documento:** versión preliminar. `QUEUED` y `RUNNING` provienen de los ADR; los demás nombres son propuestos y deben confirmarse contra `src/job_manager.py`.
+> **Versión:** Avance 02. **Responsable:** Ruy Valle.
+> Describe lo que hace el código. Los estados se calculan en `src/estados.py` (`estado_cliente`, `estado_final`), y la recuperación está en `src/recuperacion.py`.
 
 ## 1. Propósito
 
-Definir en qué estados puede encontrarse un trabajo desde que se envía hasta que termina, y qué eventos provocan cada cambio. Este modelo sirve de base para el comportamiento de `estado`, `listar`, `codigo` y `cancelar`, y para la recuperación tras un reinicio.
+Definir en qué estados puede estar un trabajo, qué evento provoca cada cambio y qué tiempos se registran. Este modelo lo usan `estado`, `listar`, `queue`, `codigo` y `cancelar`, y la recuperación al reiniciar.
 
 ## 2. Estados
 
-| Estado | Significado | Cómo se llega | Código de salida |
+El código guarda el estado en español en `data/trabajos.json`, por compatibilidad con historiales anteriores. Al mostrarlo lo traduce al nombre que pide el cliente (RF-06).
+
+| Estado (cliente) | Interno | Significado | Código de salida |
 |---|---|---|---|
-| `QUEUED` | El trabajo espera turno porque se alcanzó el límite de concurrencia | Se envía un trabajo | No tiene |
-| `RUNNING` | Un hilo trabajador lo lanzó como proceso hijo | Un hilo lo toma de la cola | No tiene |
-| `FINISHED` | Terminó correctamente | El proceso termina | `0` |
-| `FAILED` | Terminó con error | El proceso termina | `1` a `255` |
-| `CANCELLED` | Se canceló antes o durante la ejecución | Comando `cancelar` | Si ya se ejecutaba, un código negativo (por ejemplo `-15`) |
-| `INTERRUPTED` | Estaba en cola o en ejecución cuando el servicio se reinició | Recuperación al arrancar | No tiene |
+| `QUEUED` | En cola | Espera lugar: se alcanzó el límite de concurrencia o se envió con `queue` | No tiene |
+| `RUNNING` | En ejecución | Su proceso existe y Q-umplidor lo supervisa | No tiene |
+| `SUCCEEDED` | Terminado | El proceso terminó con código 0 | `0` |
+| `FAILED` | Falló (código N) | Terminó con código ≠ 0, o lo mató una señal externa | `1`–`255`, o 137/143 si fue una señal |
+| `FAILED` | Falló (tiempo máximo excedido) | La política lo detuvo por superar `Q_TIEMPO_MAXIMO` | 143 o 137 |
+| `CANCELED` | Cancelado | El usuario lo canceló, en cola o en ejecución | Sin código si estaba en cola; 143/137 si corría |
+| `INTERRUPTED` | Interrumpido | Q-umplidor se cerró o se cayó mientras corría | El que tenía al detenerse, si se conoce |
 
 ## 3. Diagrama
 
 ```mermaid
 stateDiagram-v2
-    [*] --> QUEUED
-    QUEUED --> RUNNING: un hilo lo toma
-    RUNNING --> FINISHED: código 0
-    RUNNING --> FAILED: código 1 a 255
-    QUEUED --> CANCELLED: cancelar
-    RUNNING --> CANCELLED: cancelar
-    QUEUED --> INTERRUPTED: reinicio del servicio
-    RUNNING --> INTERRUPTED: reinicio del servicio
-    FINISHED --> [*]
+    [*] --> QUEUED: enviado sin lugar
+    [*] --> RUNNING: enviado con lugar
+    QUEUED --> RUNNING: el despachador lo arranca (FIFO)
+    QUEUED --> CANCELED: cancelar
+    QUEUED --> QUEUED: reinicio (se retoma)
+    RUNNING --> SUCCEEDED: código 0
+    RUNNING --> FAILED: código ≠ 0 o señal externa
+    RUNNING --> FAILED: supera Q_TIEMPO_MAXIMO
+    RUNNING --> CANCELED: cancelar
+    RUNNING --> INTERRUPTED: cierre o caída de Q-umplidor
+    SUCCEEDED --> [*]
     FAILED --> [*]
-    CANCELLED --> [*]
+    CANCELED --> [*]
     INTERRUPTED --> [*]
 ```
 
 ## 4. Transiciones
 
-| De | A | Evento | Condición |
+| De | A | Evento | Dónde |
 |---|---|---|---|
-| (inicio) | `QUEUED` | Envío de un trabajo | El comando es válido |
-| `QUEUED` | `RUNNING` | Un hilo trabajador toma el trabajo | Hay un hilo libre (la cantidad de trabajos en ejecución es menor que el límite) |
-| `RUNNING` | `FINISHED` | El proceso termina | Código de salida `0` |
-| `RUNNING` | `FAILED` | El proceso termina | Código de salida entre `1` y `255` |
-| `QUEUED` | `CANCELLED` | Comando `cancelar` | El trabajo aún no se lanzó |
-| `RUNNING` | `CANCELLED` | Comando `cancelar` | Se envía una señal de terminación al proceso |
-| `QUEUED`, `RUNNING` | `INTERRUPTED` | Reinicio del servicio | Al arrancar se recupera el historial y se encuentran trabajos sin terminar |
+| (inicio) | `RUNNING` | `sleep N &` o `ejecutar ... &` con lugar libre | `lanzar_o_encolar` |
+| (inicio) | `QUEUED` | `queue <cmd>`, o `&` con el límite lleno | `registrar_en_cola` |
+| (inicio) | — (rechazo) | La cola llegó a `Q_CAPACIDAD_COLA`: no se registra ni consume ID | `registrar_en_cola` |
+| `QUEUED` | `RUNNING` | Hay lugar (activos < límite) y es el primero de la cola | `despachar_cola` |
+| `QUEUED` | `CANCELED` | `cancelar <id>`: se retira de la cola bajo `condicion_cola` | `cancelar` |
+| `RUNNING` | `SUCCEEDED` / `FAILED` | El proceso termina | `estado_final` |
+| `RUNNING` | `CANCELED` | `cancelar <id>`: SIGTERM → gracia → SIGKILL al grupo | `escalamiento.detener_trabajo` |
+| `RUNNING` | `FAILED` | Supera `Q_TIEMPO_MAXIMO`; misma política | `escalamiento.iniciar_vigilante` |
+| `RUNNING` | `INTERRUPTED` | Cierre normal, SIGTERM o SIGHUP: escalamiento y luego se marca | Cierre en `main.py` |
+| `RUNNING` | `INTERRUPTED` | Caída (`kill -9`): al reiniciar se detiene el huérfano si sigue vivo y luego se marca | `recuperacion.recuperar_trabajos` |
+| `QUEUED` | `QUEUED` | Reinicio: se vuelve a poner en la cola en su orden | Arranque en `main.py` |
 
-## 5. Reglas del modelo
+## 5. Reglas del modelo (invariantes)
 
-1. Un trabajo solo avanza: no hay transiciones de regreso.
-2. `FINISHED`, `FAILED`, `CANCELLED` e `INTERRUPTED` son **estados finales**.
-3. La cancelación es el único evento que puede ocurrir desde `QUEUED` y desde `RUNNING`.
-4. El código de salida solo existe si el proceso llegó a ejecutarse y terminó. Es lo que informa el comando `codigo`; un trabajo en `QUEUED` o `RUNNING` informa que aún no tiene código.
-5. Un trabajo nunca debe reportarse como `RUNNING` si su proceso ya no existe.
+1. Solo se avanza: no hay regreso desde un estado final.
+2. `SUCCEEDED`, `FAILED`, `CANCELED` e `INTERRUPTED` son **finales**.
+3. **Ningún trabajo se reporta `RUNNING` sin un proceso que lo respalde.** Los trabajos con `&` se revisan cada 0.2 s (`registrar_terminados`) y los de la cola tienen un hilo que espera su proceso.
+4. **Ningún trabajo se reporta `INTERRUPTED` con su proceso vivo.** Al reiniciar, si el proceso sigue vivo (misma huella), primero se detiene ([INC-002](../incidents/INC-002.md)).
+5. `CANCELED` solo ocurre si el usuario lo pidió. Una señal externa o el tiempo máximo dan `FAILED`.
+6. Un estado final se decide en un solo lugar, `estados.estado_final()`, para que todos los caminos den el mismo resultado.
+7. El código de salida existe solo si el proceso llegó a ejecutarse y terminó. `codigo` muestra las señales como Bash: 128 + señal.
 
-## 6. Relación con el código de salida
+## 6. Tiempos
 
-| Código | Interpretación | Estado resultante |
-|---|---|---|
-| `0` | Éxito | `FINISHED` |
-| `1` a `255` | Error del sistema | `FAILED` |
-| Negativo, producido por la cancelación del sistema (por ejemplo `-15`, señal SIGTERM) | Terminado por señal | `CANCELLED` |
+| Campo | Cuándo se fija |
+|---|---|
+| Envío | Al aceptar el trabajo (`momento_encolado`, o `inicio` si arrancó directo) |
+| Inicio | Al crear el proceso |
+| Fin | Al terminar, cancelarse o interrumpirse; con precisión de 0.2 s para los trabajos con `&` |
+| Espera | inicio − envío (tiempo en `QUEUED`) |
+| Ejecución | fin − inicio (tiempo en `RUNNING`) |
 
-*Por definir:* el estado de un trabajo terminado por una señal que no provino de `cancelar` (por ejemplo, un `kill` externo).
+Invariante: envío ≤ inicio ≤ fin. Se verifica en TC-021.
 
-## 7. Relación con la persistencia y la recuperación
+## 7. Verificación
 
-Al reiniciar el servicio, los procesos hijos de la ejecución anterior ya no existen. Por eso, al recuperar el historial (RF-13), todo trabajo que estaba en `QUEUED` o `RUNNING` se marca como `INTERRUPTED`, y nunca se reporta como en ejecución. Esta regla se verificará con la prueba de reinicio del servicio (TC-007), pendiente de la decisión del [ADR-0003](../decisions/0003-persistencia.md).
-
-## 8. Pendientes
-
-- Confirmar los nombres exactos de los estados en `src/job_manager.py` y ajustar este documento.
-- Decidir si `FAILED` es un estado separado o si se informa solo mediante el código de salida.
-- Definir el tratamiento de un trabajo terminado por una señal externa.
-- Implementar `INTERRUPTED` junto con la persistencia.
+| Regla o transición | Caso |
+|---|---|
+| Límite y `QUEUED` → `RUNNING` en orden FIFO | TC-020 |
+| Los 4 estados finales y los tiempos | TC-021 |
+| `CANCELED` con escalamiento, sin huérfanos | TC-022 |
+| `FAILED` por tiempo máximo | TC-023 |
+| `FAILED` por señal externa, sin zombis | TC-024 |
+| Regla 4 tras `kill -9`; `QUEUED` retomado | TC-025 |
+| `INTERRUPTED` por SIGTERM/SIGHUP | TC-026 |
+| Rechazo con la cola llena | TC-027 |

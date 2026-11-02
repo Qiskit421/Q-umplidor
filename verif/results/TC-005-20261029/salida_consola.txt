@@ -1,0 +1,15 @@
+Q-umplidor> ID: [1] agregado a la cola
+Q-umplidor> ID: [2] agregado a la cola
+Q-umplidor> ID: [3] agregado a la cola
+Q-umplidor> ID: [4] agregado a la cola
+Q-umplidor> Trabajo [2] cancelado (estaba en cola, no llegó a ejecutarse)
+Q-umplidor> [2] sleep 2 -> Cancelado (0s)
+Q-umplidor> Trabajo [4] cancelado (estaba en cola, no llegó a ejecutarse)
+Q-umplidor> Trabajo [1] cancelado
+Q-umplidor> ID   ESTADO               TIEMPO   COMANDO
+1    Cancelado            0      s sleep 2
+2    Cancelado            0      s sleep 2
+3    Terminado            2      s sleep 2
+4    Cancelado            0      s sleep 2
+Q-umplidor> 
+inicio del trabajo 2 en trabajos.json: None
