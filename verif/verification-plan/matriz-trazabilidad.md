@@ -11,7 +11,6 @@
 
 CRL + SHIFT + V
 
-<<<<<<< HEAD
 ## Avance 02 — Concurrencia, estados, escalamiento y recuperación (Ruy)
 
 Estado según la ejecución de `verif/scripts/prueba_avance02_ruy.py`. La evidencia está en `verif/results/TC-02x-<fecha>/`.
@@ -26,7 +25,7 @@ Estado según la ejecución de `verif/scripts/prueba_avance02_ruy.py`. La eviden
 | MT-025 | RF-12 / RF-13 / RNF-10 Recuperación tras caída | `src/recuperacion.py`; `main.py`: arranque | Cumple | [TC-025](../test-cases/casos-de-prueba.md#tc-025--caída-abrupta-kill--9-y-recuperación-rf-12-rf-13-rnf-10) | Huérfanos detenidos al reiniciar; cola retomada. [ADR-0006](../../docs/decisions/ADR-0006.md), [INC-002](../../docs/incidents/INC-002.md) |
 | MT-026 | RF-13 Cierre ordenado por señal | `src/escalamiento.py`: `instalar_cierre_por_senal`, `registrar_red_de_seguridad` | Cumple | [TC-026](../test-cases/casos-de-prueba.md#tc-026--cierre-por-sigterm--sighup-sin-huérfanos-rf-13) | SIGTERM y SIGHUP sin huérfanos. [INC-002](../../docs/incidents/INC-002.md) |
 | MT-027 | RF-25 / RNF-29 Saturación con el límite lleno | `main.py`: `lanzar_o_encolar` + `registrar_en_cola` (Oscar) | Cumple | [TC-027](../test-cases/casos-de-prueba.md#tc-027--saturación-de-la-cola-con-el-límite-lleno-rf-25-rf-05-rnf-29) | Rechazo explícito, sin mensaje contradictorio ni ID consumido |
-=======
+
 ## Avance 02
 
 | ID | Requisito | Ubicación en el código | Estado según los casos documentados | Caso de prueba asociado | Observaciones |
@@ -43,4 +42,3 @@ Estado según la ejecución de `verif/scripts/prueba_avance02_ruy.py`. La eviden
 | MT-18 | Rechazo explícito cuando la cola alcance su capacidad. | `src/main.py`: `leer_capacidad_cola` y `registrar_en_cola` (variable `Q_CAPACIDAD_COLA`, 5 por defecto). | Cumple | [CP-018](../test-cases/casos-de-prueba.md#cp-018--rechazo-con-la-cola-llena) | Con `Q_CAPACIDAD_COLA=4` y cuatro trabajos en espera, el siguiente `queue sleep 1` muestra `queue: cola llena (4/4 en espera), trabajo rechazado. Intenta de nuevo cuando avance la cola.` y no se le asigna ID. |
 | MT-19 | Manejo de solicitudes concurrentes o duplicadas. | `src/main.py`: `buscar_duplicado` y `normalizar_comando`; candado `bloqueo_guardado` al guardar. | Cumple | [CP-019](../test-cases/casos-de-prueba.md#cp-019--solicitudes-concurrentes-o-duplicadas) | Al repetir `queue sleep 30` mientras el primero sigue activo aparece `aviso: ya hay un trabajo activo con el mismo comando ([1])` y la bitácora lo registra con `duplicado_de=1`. Repetir `cancelar 1` muestra `cancelar: el trabajo [1] ya estaba cancelado` sin cancelarlo dos veces. |
 | MT-20 | Liberación adecuada de procesos, archivos y otros recursos. | `src/main.py`: comandos `recursos` (`mostrar_recursos`) y `queue clear` (`limpiar_salidas_terminadas`); `recolectar_terminados` y `liberar_recursos` al cerrar. | Cumple | [CP-020](../test-cases/casos-de-prueba.md#cp-020--liberación-de-procesos-archivos-y-recursos) | Antes de lanzar trabajos, `recursos` muestra `(todavía no se ha lanzado ninguno)`. Con tres trabajos activos muestra `Procesos hijos vivos ... 3 (trabajos: [1], [3], [4])` y 0 zombis, 0 huérfanos y 0 archivos abiertos; tras `cancelar 1` el trabajo 1 desaparece de la lista. `queue clear` muestra `se borraron 2 archivos de salida de trabajos terminados`. |
->>>>>>> origin/main
