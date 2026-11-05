@@ -265,7 +265,20 @@ def registrar_trabajo(proceso, entrada):
     siguiente_id += 1
     guardar_trabajos()
     
+# Capacidad máxima de trabajos esperando en la cola (RF-25). Se configura con la
+# variable de entorno Q_CAPACIDAD_COLA, por ejemplo: Q_CAPACIDAD_COLA=3 python3 src/main.py
+def leer_capacidad_cola():
+    valor = os.environ.get("Q_CAPACIDAD_COLA", "5")
+    try:
+        capacidad = int(valor)
+        if capacidad < 1:
+            raise ValueError
+    except ValueError:
+        raise SystemExit(f"Q_CAPACIDAD_COLA debe ser un entero mayor o igual a 1 (se recibió '{valor}')")
+    return capacidad
 
+
+CAPACIDAD_COLA = leer_capacidad_cola()
 
 # Cola exclusiva para comandos "queue sleep N".
 # Se reutilizan lanzar_trabajo() y rutas_salida() para capturar stdout/stderr.
@@ -278,6 +291,14 @@ id_cola_activo = None
 def registrar_en_cola(comando, entrada):
     """Registra cualquier comando pendiente y lo agrega al final de la cola."""
     global siguiente_id
+    with condicion_cola:
+        en_espera = len(cola_ids)
+    if en_espera >= CAPACIDAD_COLA:
+        # Rechazo explícito (RF-25, RNF-29): no se registra, no consume ID y no bloquea.
+        BITACORA.record(ev.JOB_REJECTED, comando=comando, motivo="cola llena")
+        print(f"queue: cola llena ({en_espera}/{CAPACIDAD_COLA} en espera), trabajo rechazado. "
+              "Intenta de nuevo cuando avance la cola.")
+        return
     id_trabajo = siguiente_id
     duplicado = buscar_duplicado(entrada)
     extra = {} if duplicado is None else {"duplicado_de": duplicado}
@@ -331,8 +352,8 @@ def procesar_cola():
 
         try:
             with bloqueo_trabajos:
-                if trabajo["cancelado"]:
-                    continue  # lo cancelaron mientras esperaba su turno
+                if trabajo["cancelado"] or cola_cerrandose:
+                   continue  # lo cancelaron, o el programa se está cerrando 
                 trabajo["inicio"] = time.time()
                 trabajo["estado"] = "En ejecución"
             guardar_trabajos()
@@ -672,7 +693,7 @@ def estado_trabajo(trabajo):
 def tiempo_trabajo(trabajo):
     """Evita que el tiempo de un trabajo terminado siga aumentando."""
     if trabajo["inicio"] is None:
-        return 0  # nunca empezó (estaba en cola)
+        return 0  # Todavía en cola, o cancelado antes de arrancar.
     return int((trabajo["fin"] or time.time()) - trabajo["inicio"])
 
 
@@ -821,6 +842,45 @@ def recolectar_terminados():
 hilo_recolector = threading.Thread(target=recolectar_terminados, daemon=True)
 hilo_recolector.start()
 
+def barrido_final():
+    """Último recurso: mata y recolecta lo que haya quedado de Q-umplidor."""
+    if os.name == "nt":
+        for trabajo in list(trabajos.values()):
+            grupo = trabajo.get("grupo_windows")
+            if grupo is not None:
+                grupo.terminar()
+                limite = time.time() + 2
+                while grupo.activos() > 0 and time.time() < limite:
+                    time.sleep(0.05)
+                grupo.cerrar()
+                trabajo["grupo_windows"] = None
+        return
+
+    # Linux/WSL: los procesos que escaparon de su grupo (setsid, demonios)
+    # siguen llevando QUMPLIDOR_TRABAJO en su entorno, así que se encuentran por ahí.
+    limite = time.time() + 2
+    while True:
+        sobrevivientes = [
+            pid
+            for pid, _ppid, _estado, id_trabajo in procesos_linux(ARCHIVO_TRABAJOS.parent)
+            if id_trabajo is not None and pid != os.getpid()
+        ]
+        for pid in sobrevivientes:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass  # ya terminó
+        # Recolecta cualquier hijo directo que haya quedado como zombi.
+        while True:
+            try:
+                pid, _ = os.waitpid(-1, os.WNOHANG)
+            except ChildProcessError:
+                break  # ya no quedan hijos
+            if pid == 0:
+                break  # hay hijos, pero ninguno terminado
+        if not sobrevivientes or time.time() >= limite:
+            break
+        time.sleep(0.05)
 
 def liberar_recursos():
     """Al salir, por la razón que sea, termina y recolecta todos los trabajos activos."""
@@ -828,7 +888,9 @@ def liberar_recursos():
     if os.name == "posix":
         signal.signal(signal.SIGTERM, signal.SIG_IGN)  # que otra señal no corte la limpieza
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)       # ni un Ctrl+C
     cerrando.set()
+    hilo_recolector.join(timeout=1)                    # que no compita con la limpieza
     with condicion_cola:
         cola_cerrandose = True  # la cola ya no inicia más trabajos
         condicion_cola.notify_all()
@@ -839,7 +901,7 @@ def liberar_recursos():
             with bloqueo_trabajos:
                 proceso = trabajo["proceso"]
                 if proceso is not None:
-                    trabajo["interrumpido"] = True  # así lo cierra como interrumpido quien llegue primero
+                    trabajo["interrumpido"] = True
             if proceso is not None:
                 terminar_proceso(proceso)
                 finalizar_trabajo(id_trabajo, trabajo, proceso.returncode)
@@ -849,10 +911,7 @@ def liberar_recursos():
     # que termine y se revisa otra vez para que ningún proceso quede vivo.
     hilo_cola.join(timeout=3)
     terminar_activos()
-    for trabajo in list(trabajos.values()):
-        if trabajo.get("grupo_windows") is not None:
-            trabajo["grupo_windows"].cerrar()
-            trabajo["grupo_windows"] = None
+    barrido_final()   # escapados de su grupo, zombis y grupos de Windows
     guardar_trabajos()
 
 
@@ -882,6 +941,11 @@ while True:
     if len(partes) == 0:
         continue
 
+    # "queue cancelar <id>" es un alias de "cancelar <id>". Sin esto, queue lo
+    # formaría como un comando de bash llamado "cancelar" y no cancelaría nada.
+    if len(partes) >= 2 and partes[0] == "queue" and partes[1] == "cancelar":
+        partes = partes[1:]
+
     if partes[0] == "help":
         if len(partes) != 1:
             print("help: no acepta argumentos. Uso: help")
@@ -892,13 +956,14 @@ while True:
         print("  estado <id>         Consultar el estado de un trabajo.")
         print("  listar              Listar los trabajos registrados.")
         print("  codigo <id>         Consultar el código de salida.")
-        print("  cancelar <id>       Cancelar un trabajo.")
+        print("  cancelar <id>       Cancelar un trabajo en ejecución o en cola.")
 
         print("\n-------------------- AVANCE 02 --------------------\n")
 
         print("  queue <comando>     Ejecutar echo, sleep (&) o un programa en cola.")
         print("  queue               Mostrar la cola de trabajos.")
         print("  queue clear         Borrar los archivos de salida de trabajos terminados.")
+        print("  queue cancelar <id> Igual que cancelar <id>.")
         print("  salida <id>         Mostrar la salida estándar (stdout).")
         print("  errores <id>        Mostrar la salida de error (stderr).")
         print("  eventos [id]        Consultar la bitácora de eventos.")
@@ -1062,6 +1127,11 @@ while True:
                     trabajo["cancelado"] = True
                     trabajo["estado"] = "Cancelado"
                     trabajo["fin"] = time.time()
+                    with condicion_cola:
+                        try:
+                            cola_ids.remove(id_trabajo)
+                        except ValueError:
+                            pass  # el hilo de la cola ya lo había sacado
                     guardar_trabajos()
                     for ruta in rutas_salida(id_trabajo):
                         ruta.unlink(missing_ok=True)  # nunca corrió: no conserva archivos
@@ -1110,4 +1180,3 @@ while True:
     else:
         print(f"{partes[0]}: comando no reconocido")
 
-# Al salir del ciclo, atexit ejecuta liberar_recursos().

@@ -20,7 +20,6 @@ Desarrollaremos **Q-umplidor**, que funcionará como un gestor de trabajos para 
 ## 🏗️ Construcción provisional
 
 ### Tecnologías y entorno
-> El proyecto se encuentra en una etapa inicial; aún no tenemos definido con certeza el lenguaje que utilizaremos, pero de manera provisional será Python.
 - **Python 3:** lenguaje propuesto para el desarrollo.
 - **Linux:** sistema operativo.
 
