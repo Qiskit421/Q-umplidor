@@ -4,8 +4,8 @@
     {
       "id": 1,
       "comando": "sleep 600 &",
-      "inicio": 1793599455.595971,
-      "fin": 1793599456.2049658,
+      "inicio": 1793675958.7416637,
+      "fin": 1793675959.3454661,
       "estado": "Interrumpido",
       "codigo": -15,
       "es_cola": false,
@@ -15,16 +15,16 @@
       "motivo_fin": "cierre de Q-umplidor",
       "senal_final": "SIGTERM",
       "huella": {
-        "pid": 773,
-        "inicio_proceso": 30928,
-        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+        "pid": 873,
+        "inicio_proceso": 42833,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
       }
     },
     {
       "id": 2,
       "comando": "ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &",
-      "inicio": 1793599455.796666,
-      "fin": 1793599457.2074494,
+      "inicio": 1793675958.9437008,
+      "fin": 1793675960.346425,
       "estado": "Interrumpido",
       "codigo": -9,
       "es_cola": false,
@@ -34,9 +34,9 @@
       "motivo_fin": "cierre de Q-umplidor",
       "senal_final": "SIGKILL",
       "huella": {
-        "pid": 774,
-        "inicio_proceso": 30948,
-        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+        "pid": 874,
+        "inicio_proceso": 42853,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
       }
     }
   ]

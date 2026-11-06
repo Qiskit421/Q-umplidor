@@ -4,8 +4,8 @@
     {
       "id": 1,
       "comando": "sleep 600 &",
-      "inicio": 1793599446.721614,
-      "fin": 1793599448.4036055,
+      "inicio": 1793675949.8465917,
+      "fin": 1793675951.5415902,
       "estado": "Interrumpido",
       "codigo": null,
       "es_cola": false,
@@ -15,16 +15,16 @@
       "motivo_fin": "recuperación: proceso huérfano detenido",
       "senal_final": "SIGTERM",
       "huella": {
-        "pid": 745,
-        "inicio_proceso": 30041,
-        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+        "pid": 847,
+        "inicio_proceso": 41944,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
       }
     },
     {
       "id": 2,
       "comando": "ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &",
-      "inicio": 1793599446.9221337,
-      "fin": 1793599449.4704714,
+      "inicio": 1793675950.0459838,
+      "fin": 1793675952.6021917,
       "estado": "Interrumpido",
       "codigo": null,
       "es_cola": false,
@@ -34,47 +34,47 @@
       "motivo_fin": "recuperación: proceso huérfano detenido",
       "senal_final": "SIGKILL",
       "huella": {
-        "pid": 746,
-        "inicio_proceso": 30061,
-        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+        "pid": 848,
+        "inicio_proceso": 41964,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
       }
     },
     {
       "id": 3,
       "comando": "sleep 601; echo fin",
-      "inicio": 1793599447.1221113,
-      "fin": 1793599449.521347,
+      "inicio": 1793675950.2456152,
+      "fin": 1793675952.6526341,
       "estado": "Interrumpido",
       "codigo": null,
       "es_cola": true,
       "segundos_solicitados": 0,
-      "momento_encolado": 1793599447.1213305,
+      "momento_encolado": 1793675950.2451875,
       "argumentos_cola": "sleep 601; echo fin",
       "motivo_fin": "recuperación: proceso huérfano detenido",
       "senal_final": "SIGTERM",
       "huella": {
-        "pid": 748,
-        "inicio_proceso": 30081,
-        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+        "pid": 850,
+        "inicio_proceso": 41984,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
       }
     },
     {
       "id": 4,
       "comando": "echo recuperado",
-      "inicio": 1793599449.522783,
-      "fin": 1793599449.5272074,
+      "inicio": 1793675952.6534016,
+      "fin": 1793675952.6579368,
       "estado": "Terminado",
       "codigo": 0,
       "es_cola": true,
       "segundos_solicitados": 0,
-      "momento_encolado": 1793599447.3218834,
+      "momento_encolado": 1793675950.4463701,
       "argumentos_cola": "echo recuperado",
       "motivo_fin": null,
       "senal_final": null,
       "huella": {
-        "pid": 758,
-        "inicio_proceso": 30321,
-        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+        "pid": 858,
+        "inicio_proceso": 42225,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
       }
     }
   ]

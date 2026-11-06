@@ -4,8 +4,8 @@
     {
       "id": 1,
       "comando": "ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &",
-      "inicio": 1793599437.5673034,
-      "fin": 1793599440.893292,
+      "inicio": 1793675940.6543455,
+      "fin": 1793675943.9808598,
       "estado": "Falló (tiempo máximo excedido)",
       "codigo": -9,
       "es_cola": false,
@@ -15,16 +15,16 @@
       "motivo_fin": "tiempo máximo excedido",
       "senal_final": "SIGKILL",
       "huella": {
-        "pid": 724,
-        "inicio_proceso": 29125,
-        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+        "pid": 826,
+        "inicio_proceso": 41025,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
       }
     },
     {
       "id": 2,
       "comando": "sleep 1 &",
-      "inicio": 1793599437.6669397,
-      "fin": 1793599438.6943598,
+      "inicio": 1793675940.7545807,
+      "fin": 1793675941.7805538,
       "estado": "Terminado",
       "codigo": 0,
       "es_cola": false,
@@ -34,9 +34,9 @@
       "motivo_fin": null,
       "senal_final": null,
       "huella": {
-        "pid": 725,
-        "inicio_proceso": 29135,
-        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+        "pid": 827,
+        "inicio_proceso": 41035,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
       }
     }
   ]

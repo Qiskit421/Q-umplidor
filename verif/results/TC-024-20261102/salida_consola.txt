@@ -2,12 +2,12 @@
 ID: [1]
 >>> queue sleep 301
 ID: [2] agregado a la cola
-### kill -KILL 733  (trabajo 1, desde otra terminal)
-### kill -TERM 735  (trabajo 2, desde otra terminal)
+### kill -KILL 835  (trabajo 1, desde otra terminal)
+### kill -TERM 837  (trabajo 2, desde otra terminal)
 >>> listar
 ID   ESTADO      ENVIADO   INICIO    FIN       ESPERA   EJECUCIÓN  COMANDO
-1    FAILED      00:04:03  00:04:03  00:04:04  0s       0s         ejecutar sleep 300 &
-2    FAILED      00:04:03  00:04:03  00:04:04  0s       0s         sleep 301
+1    FAILED      21:19:06  21:19:06  21:19:07  0s       0s         ejecutar sleep 300 &
+2    FAILED      21:19:06  21:19:06  21:19:07  0s       0s         sleep 301
 >>> codigo 1
 codigo: el trabajo [1] terminó con código de salida 137
 >>> codigo 2

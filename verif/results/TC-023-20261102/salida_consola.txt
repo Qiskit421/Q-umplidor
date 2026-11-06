@@ -12,13 +12,13 @@ ID: [2]
 [aviso] Trabajo [1] superó el tiempo máximo y se detuvo (forzado con SIGKILL)
 >>> listar
 ID   ESTADO      ENVIADO   INICIO    FIN       ESPERA   EJECUCIÓN  COMANDO
-1    FAILED      00:03:57  00:03:57  00:04:00  0s       3s         ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &
-2    SUCCEEDED   00:03:57  00:03:57  00:03:58  0s       1s         sleep 1 &
+1    FAILED      21:19:00  21:19:00  21:19:03  0s       3s         ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &
+2    SUCCEEDED   21:19:00  21:19:00  21:19:01  0s       1s         sleep 1 &
 >>> estado 1
 [1] ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' & -> FAILED (Falló (tiempo máximo excedido))
-  Enviado:   2026-11-02 00:03:57
-  Inicio:    2026-11-02 00:03:57
-  Fin:       2026-11-02 00:04:00
+  Enviado:   2026-11-02 21:19:00
+  Inicio:    2026-11-02 21:19:00
+  Fin:       2026-11-02 21:19:03
   Espera:    0s
   Ejecución: 3s
   Escalamiento: tiempo máximo excedido; no respondió a SIGTERM, se forzó con SIGKILL

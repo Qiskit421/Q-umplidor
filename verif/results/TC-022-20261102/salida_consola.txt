@@ -27,9 +27,9 @@ codigo: el trabajo [1] terminó con código de salida 143
 codigo: el trabajo [2] terminó con código de salida 137
 >>> estado 2
 [2] ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' & -> CANCELED (Cancelado)
-  Enviado:   2026-11-02 00:03:52
-  Inicio:    2026-11-02 00:03:52
-  Fin:       2026-11-02 00:03:55
+  Enviado:   2026-11-02 21:18:55
+  Inicio:    2026-11-02 21:18:55
+  Fin:       2026-11-02 21:18:58
   Espera:    0s
   Ejecución: 2s
   Escalamiento: cancelado por el usuario; no respondió a SIGTERM, se forzó con SIGKILL

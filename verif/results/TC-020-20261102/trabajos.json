@@ -4,8 +4,8 @@
     {
       "id": 1,
       "comando": "sleep 2 &",
-      "inicio": 1793599418.684388,
-      "fin": 1793599420.8877783,
+      "inicio": 1793675921.767121,
+      "fin": 1793675923.973496,
       "estado": "Terminado",
       "codigo": 0,
       "es_cola": false,
@@ -15,16 +15,16 @@
       "motivo_fin": null,
       "senal_final": null,
       "huella": {
-        "pid": 564,
-        "inicio_proceso": 27237,
-        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+        "pid": 671,
+        "inicio_proceso": 39136,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
       }
     },
     {
       "id": 2,
       "comando": "sleep 2 &",
-      "inicio": 1793599418.7851653,
-      "fin": 1793599420.888078,
+      "inicio": 1793675921.866503,
+      "fin": 1793675923.9745634,
       "estado": "Terminado",
       "codigo": 0,
       "es_cola": false,
@@ -34,66 +34,66 @@
       "motivo_fin": null,
       "senal_final": null,
       "huella": {
-        "pid": 565,
-        "inicio_proceso": 27247,
-        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+        "pid": 672,
+        "inicio_proceso": 39146,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
       }
     },
     {
       "id": 3,
       "comando": "sleep 2 &",
-      "inicio": 1793599420.8883677,
-      "fin": 1793599422.8990078,
+      "inicio": 1793675923.9757938,
+      "fin": 1793675925.9972715,
       "estado": "Terminado",
       "codigo": 0,
       "es_cola": true,
       "segundos_solicitados": 2,
-      "momento_encolado": 1793599418.8848004,
+      "momento_encolado": 1793675921.966946,
       "argumentos_cola": "sleep 2",
       "motivo_fin": null,
       "senal_final": null,
       "huella": {
-        "pid": 600,
-        "inicio_proceso": 27458,
-        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+        "pid": 705,
+        "inicio_proceso": 39357,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
       }
     },
     {
       "id": 4,
       "comando": "sleep 2",
-      "inicio": 1793599420.8888772,
-      "fin": 1793599422.9017003,
+      "inicio": 1793675923.9765847,
+      "fin": 1793675926.0011141,
       "estado": "Terminado",
       "codigo": 0,
       "es_cola": true,
       "segundos_solicitados": 2,
-      "momento_encolado": 1793599418.9848878,
+      "momento_encolado": 1793675922.0669227,
       "argumentos_cola": "sleep 2",
       "motivo_fin": null,
       "senal_final": null,
       "huella": {
-        "pid": 601,
-        "inicio_proceso": 27458,
-        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+        "pid": 706,
+        "inicio_proceso": 39357,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
       }
     },
     {
       "id": 5,
       "comando": "ejecutar echo hola &",
-      "inicio": 1793599422.8994668,
-      "fin": 1793599422.909546,
+      "inicio": 1793675925.9998791,
+      "fin": 1793675926.0149372,
       "estado": "Terminado",
       "codigo": 0,
       "es_cola": true,
       "segundos_solicitados": 0,
-      "momento_encolado": 1793599419.0853145,
+      "momento_encolado": 1793675922.1679366,
       "argumentos_cola": "echo hola",
       "motivo_fin": null,
       "senal_final": null,
       "huella": {
-        "pid": 640,
-        "inicio_proceso": 27659,
-        "boot_id": "6db2d203-be3a-4413-ab2d-e732701773f3"
+        "pid": 744,
+        "inicio_proceso": 39559,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
       }
     }
   ]

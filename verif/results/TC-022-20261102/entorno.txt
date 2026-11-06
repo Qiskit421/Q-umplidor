@@ -1,5 +1,5 @@
 Caso: TC-022 — Escalamiento SIGTERM -> SIGKILL sin huérfanos (RF-30, RF-10)
-Fecha: 2026-11-02T00:03:56
-Commit: 63510f6
+Fecha: 2026-11-02T21:18:59
+Commit: 0cb78a9
 Entorno: Linux 6.18.54.1-microsoft-standard-WSL2, Python 3.14.4
 Configuración: {'Q_LIMITE_CONCURRENCIA': '5', 'Q_GRACIA_SIGTERM': '1'}

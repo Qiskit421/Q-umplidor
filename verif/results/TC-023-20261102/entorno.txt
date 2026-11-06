@@ -1,5 +1,5 @@
 Caso: TC-023 — Tiempo máximo por trabajo (RF-30)
-Fecha: 2026-11-02T00:04:02
-Commit: 63510f6
+Fecha: 2026-11-02T21:19:06
+Commit: 0cb78a9
 Entorno: Linux 6.18.54.1-microsoft-standard-WSL2, Python 3.14.4
 Configuración: {'Q_TIEMPO_MAXIMO': '2', 'Q_GRACIA_SIGTERM': '1'}
