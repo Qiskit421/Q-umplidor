@@ -1,0 +1,43 @@
+{
+  "siguiente_id": 3,
+  "trabajos": [
+    {
+      "id": 1,
+      "comando": "ejecutar sleep 300 &",
+      "inicio": 1793981435.0571914,
+      "fin": 1793981436.1853006,
+      "estado": "Falló (código -9)",
+      "codigo": -9,
+      "es_cola": false,
+      "segundos_solicitados": null,
+      "momento_encolado": null,
+      "argumentos_cola": null,
+      "motivo_fin": null,
+      "senal_final": null,
+      "huella": {
+        "pid": 750,
+        "inicio_proceso": 19832,
+        "boot_id": "b6b515a4-fcf8-4df1-9474-f6d09b9503f1"
+      }
+    },
+    {
+      "id": 2,
+      "comando": "sleep 301",
+      "inicio": 1793981435.2580643,
+      "fin": 1793981435.863058,
+      "estado": "Falló (código -15)",
+      "codigo": -15,
+      "es_cola": true,
+      "segundos_solicitados": 301,
+      "momento_encolado": 1793981435.2558842,
+      "argumentos_cola": "sleep 301",
+      "motivo_fin": null,
+      "senal_final": null,
+      "huella": {
+        "pid": 752,
+        "inicio_proceso": 19852,
+        "boot_id": "b6b515a4-fcf8-4df1-9474-f6d09b9503f1"
+      }
+    }
+  ]
+}

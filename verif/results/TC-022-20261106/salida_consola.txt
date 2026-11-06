@@ -1,0 +1,37 @@
+>>> sleep 300 &
+ID: [1]
+>>> ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &
+ID: [2]
+>>> queue sleep 77; echo fin
+ID: [3] agregado a la cola
+>>> ejecutar bash -c 'sleep 88; echo x' &
+ID: [4]
+>>> politica
+Política de escalamiento:
+  1. SIGTERM al grupo de procesos del trabajo
+  2. Gracia: 1s (Q_GRACIA_SIGTERM)
+  3. SIGKILL si sigue vivo, y wait() para no dejar zombis
+  Tiempo máximo por trabajo: sin límite (Q_TIEMPO_MAXIMO=0)
+### Procesos de los trabajos antes de cancelar: 6
+>>> cancelar 1
+Trabajo [1] cancelado
+>>> cancelar 2
+Trabajo [2] cancelado (no respondió a SIGTERM en 1s, se forzó con SIGKILL)
+>>> cancelar 3
+Trabajo [3] cancelado
+>>> cancelar 4
+Trabajo [4] cancelado
+>>> codigo 1
+codigo: el trabajo [1] terminó con código de salida 143
+>>> codigo 2
+codigo: el trabajo [2] terminó con código de salida 137
+>>> estado 2
+[2] ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' & -> CANCELED (Cancelado)
+  Enviado:   2026-11-06 10:10:24
+  Inicio:    2026-11-06 10:10:24
+  Fin:       2026-11-06 10:10:26
+  Espera:    0s
+  Ejecución: 2s
+  Escalamiento: cancelado por el usuario; no respondió a SIGTERM, se forzó con SIGKILL
+### Procesos de los trabajos después de cancelar: 0
+

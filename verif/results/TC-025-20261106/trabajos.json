@@ -1,0 +1,81 @@
+{
+  "siguiente_id": 5,
+  "trabajos": [
+    {
+      "id": 1,
+      "comando": "sleep 600 &",
+      "inicio": 1793981438.4029891,
+      "fin": 1793981440.0936873,
+      "estado": "Interrumpido",
+      "codigo": null,
+      "es_cola": false,
+      "segundos_solicitados": null,
+      "momento_encolado": null,
+      "argumentos_cola": null,
+      "motivo_fin": "recuperación: proceso huérfano detenido",
+      "senal_final": "SIGTERM",
+      "huella": {
+        "pid": 763,
+        "inicio_proceso": 20167,
+        "boot_id": "b6b515a4-fcf8-4df1-9474-f6d09b9503f1"
+      }
+    },
+    {
+      "id": 2,
+      "comando": "ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &",
+      "inicio": 1793981438.603909,
+      "fin": 1793981441.1613667,
+      "estado": "Interrumpido",
+      "codigo": null,
+      "es_cola": false,
+      "segundos_solicitados": null,
+      "momento_encolado": null,
+      "argumentos_cola": null,
+      "motivo_fin": "recuperación: proceso huérfano detenido",
+      "senal_final": "SIGKILL",
+      "huella": {
+        "pid": 764,
+        "inicio_proceso": 20187,
+        "boot_id": "b6b515a4-fcf8-4df1-9474-f6d09b9503f1"
+      }
+    },
+    {
+      "id": 3,
+      "comando": "sleep 601; echo fin",
+      "inicio": 1793981438.8048768,
+      "fin": 1793981441.2125227,
+      "estado": "Interrumpido",
+      "codigo": null,
+      "es_cola": true,
+      "segundos_solicitados": 0,
+      "momento_encolado": 1793981438.803047,
+      "argumentos_cola": "sleep 601; echo fin",
+      "motivo_fin": "recuperación: proceso huérfano detenido",
+      "senal_final": "SIGTERM",
+      "huella": {
+        "pid": 766,
+        "inicio_proceso": 20207,
+        "boot_id": "b6b515a4-fcf8-4df1-9474-f6d09b9503f1"
+      }
+    },
+    {
+      "id": 4,
+      "comando": "echo recuperado",
+      "inicio": 1793981441.2140381,
+      "fin": 1793981441.219982,
+      "estado": "Terminado",
+      "codigo": 0,
+      "es_cola": true,
+      "segundos_solicitados": 0,
+      "momento_encolado": 1793981439.0036914,
+      "argumentos_cola": "echo recuperado",
+      "motivo_fin": null,
+      "senal_final": null,
+      "huella": {
+        "pid": 774,
+        "inicio_proceso": 20448,
+        "boot_id": "b6b515a4-fcf8-4df1-9474-f6d09b9503f1"
+      }
+    }
+  ]
+}
