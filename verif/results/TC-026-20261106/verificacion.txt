@@ -1,0 +1,8 @@
+PASS  SIGTERM: Q-umplidor sale en orden (código 143)  [143]
+PASS  SIGTERM: ningún trabajo queda vivo
+PASS  SIGTERM: ambos quedan INTERRUPTED con motivo de cierre
+PASS  SIGHUP: Q-umplidor sale en orden (código 129)  [129]
+PASS  SIGHUP: ningún trabajo queda vivo
+PASS  SIGHUP: ambos quedan INTERRUPTED con motivo de cierre
+
+RESULTADO TC-026: PASS

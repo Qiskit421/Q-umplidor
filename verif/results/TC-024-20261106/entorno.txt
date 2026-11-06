@@ -1,0 +1,5 @@
+Caso: TC-024 — Proceso hijo terminado desde fuera (robustez, RF-06)
+Fecha: 2026-11-06T10:10:37
+Commit: a97f6de
+Entorno: Linux 6.18.54.1-microsoft-standard-WSL2, Python 3.14.4
+Configuración: {'Q_LIMITE_CONCURRENCIA': '3'}

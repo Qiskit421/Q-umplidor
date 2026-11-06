@@ -1,0 +1,43 @@
+{
+  "siguiente_id": 3,
+  "trabajos": [
+    {
+      "id": 1,
+      "comando": "sleep 600 &",
+      "inicio": 1793981447.28721,
+      "fin": 1793981447.8939037,
+      "estado": "Interrumpido",
+      "codigo": -15,
+      "es_cola": false,
+      "segundos_solicitados": null,
+      "momento_encolado": null,
+      "argumentos_cola": null,
+      "motivo_fin": "cierre de Q-umplidor",
+      "senal_final": "SIGTERM",
+      "huella": {
+        "pid": 792,
+        "inicio_proceso": 21055,
+        "boot_id": "b6b515a4-fcf8-4df1-9474-f6d09b9503f1"
+      }
+    },
+    {
+      "id": 2,
+      "comando": "ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &",
+      "inicio": 1793981447.490056,
+      "fin": 1793981448.895488,
+      "estado": "Interrumpido",
+      "codigo": -9,
+      "es_cola": false,
+      "segundos_solicitados": null,
+      "momento_encolado": null,
+      "argumentos_cola": null,
+      "motivo_fin": "cierre de Q-umplidor",
+      "senal_final": "SIGKILL",
+      "huella": {
+        "pid": 793,
+        "inicio_proceso": 21075,
+        "boot_id": "b6b515a4-fcf8-4df1-9474-f6d09b9503f1"
+      }
+    }
+  ]
+}

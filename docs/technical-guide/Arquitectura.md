@@ -77,7 +77,7 @@ El modelo completo (con `QUEUED`) está en [ModeloDeEstados.md](ModeloDeEstados.
 ## 6.1 Cola de trabajos
 
 - **Estructura:** `cola_ids` (un `deque` con los IDs en espera) protegida por `condicion_cola` (`threading.Condition`).
-- **Hilo de la cola:** `procesar_cola()` corre en un hilo aparte. Espera en la condición, saca el siguiente ID y lo ejecuta hasta que termina; así los trabajos de la cola corren de uno en uno y en orden.
+- **Hilo de la cola:** `despachar_cola()` corre en un hilo aparte. Espera en la condición, saca el siguiente ID en orden de llegada mientras haya lugar según el límite de concurrencia (RF-05) y lanza un hilo `ejecutar_de_cola()` por trabajo. Con `Q_LIMITE_CONCURRENCIA=1` los trabajos corren de uno en uno.
 - **Capacidad (RF-25, RNF-29):** `CAPACIDAD_COLA` se lee de la variable de entorno `Q_CAPACIDAD_COLA` (por defecto 5, mínimo 1). Si al encolar ya hay esa cantidad esperando, `registrar_en_cola()` rechaza de inmediato: no registra, no consume ID y no bloquea. Un valor inválido detiene el arranque con un mensaje.
 - **Cancelar en cola (RF-10):** `cancelar` busca el ID en `cola_ids` **dentro de `condicion_cola`**, el mismo candado que usa el hilo. Si lo encuentra, lo retira y lo marca "Cancelado" sin que llegue a arrancar. Así el hilo y la consola nunca deciden sobre el mismo trabajo al mismo tiempo. Si el hilo ya lo tomó pero aún no tiene proceso, se avisa que está arrancando. Ver [INC-001](../incidents/INC-001.md). `queue cancelar <id>` se traduce a `cancelar <id>` antes de interpretar el comando; sin eso, `queue` lo formaba como un comando de bash inexistente.
 - **Tiempo:** `tiempo_trabajo()` devuelve 0 para trabajos sin `inicio` (en cola o cancelados antes de arrancar).
@@ -107,7 +107,7 @@ La decisión real es JSON con escritura atómica, no SQLite: el ADR-0003 debe ac
 | Solicitudes concurrentes o duplicadas | RF-26 | Marlene |
 | Liberación de recursos (recolectar hijos sin esperar una consulta) | — | Marlene |
 
-La cola hoy abre sus propios archivos de salida en `procesar_cola()` en lugar de llamar a `lanzar_trabajo()`; conviene unificarlo para que haya un solo punto donde se lanzan procesos.
+La cola hoy abre sus propios archivos de salida en `ejecutar_de_cola()` en lugar de llamar a `lanzar_trabajo()`; conviene unificarlo para que haya un solo punto donde se lanzan procesos.
 
 ## 9. Decisiones relacionadas
 

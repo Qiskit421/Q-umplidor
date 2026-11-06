@@ -1,0 +1,11 @@
+PASS  Sin procesos zombi hijos de Q-umplidor (al terminar)
+PASS  Q-umplidor no deja archivos de data/ abiertos (al terminar)
+PASS  Antes de cancelar, los trabajos de shell tenían hijos (bash + sleep)  [6 procesos]
+PASS  Obediente: terminó con SIGTERM, código 143
+PASS  Terco: se forzó con SIGKILL, código 137
+PASS  Terco: se esperó la gracia (~1 s) antes de SIGKILL  [1.00s]
+PASS  Los 4 quedaron CANCELED
+PASS  Ningún proceso de los trabajos sigue vivo (sin huérfanos)
+PASS  motivo_fin y senal_final quedan persistidos
+
+RESULTADO TC-022: PASS

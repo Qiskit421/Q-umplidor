@@ -1,0 +1,23 @@
+Q-umplidor> ID: [1] agregado a la cola
+Q-umplidor> ID: [2] agregado a la cola
+aviso: ya hay un trabajo activo con el mismo comando ([1])
+Q-umplidor> ID: [3] agregado a la cola
+aviso: ya hay un trabajo activo con el mismo comando ([1])
+Q-umplidor> ID: [4] agregado a la cola
+aviso: ya hay un trabajo activo con el mismo comando ([1])
+Q-umplidor> Trabajo [2] cancelado (estaba en cola)
+Q-umplidor> [2] sleep 2 -> CANCELED (Cancelado)
+  Enviado:   2026-11-06 10:10:51
+  Inicio:    -
+  Fin:       2026-11-06 10:10:51
+  Espera:    0s
+  Ejecución: -
+Q-umplidor> Trabajo [4] cancelado (estaba en cola)
+Q-umplidor> Trabajo [1] cancelado
+Q-umplidor> ID   ESTADO      ENVIADO   INICIO    FIN       ESPERA   EJECUCIÓN  COMANDO
+1    CANCELED    10:10:51  10:10:51  10:10:51  0s       0s         sleep 2
+2    CANCELED    10:10:51  -         10:10:51  0s       -          sleep 2
+3    SUCCEEDED   10:10:51  10:10:51  10:10:53  0s       2s         sleep 2
+4    CANCELED    10:10:51  -         10:10:51  0s       -          sleep 2
+Q-umplidor> 
+inicio del trabajo 2 en trabajos.json: None

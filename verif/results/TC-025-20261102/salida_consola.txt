@@ -1,0 +1,37 @@
+>>> sleep 600 &
+ID: [1]
+>>> ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &
+ID: [2]
+>>> queue sleep 601; echo fin
+ID: [3] agregado a la cola
+>>> queue echo recuperado
+ID: [4] agregado a la cola
+>>> listar
+ID   ESTADO      ENVIADO   INICIO    FIN       ESPERA   EJECUCIÓN  COMANDO
+1    RUNNING     21:19:09  21:19:09  -         0s       0s         sleep 600 &
+2    RUNNING     21:19:10  21:19:10  -         0s       0s         ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &
+3    RUNNING     21:19:10  21:19:10  -         0s       0s         sleep 601; echo fin
+4    QUEUED      21:19:10  -         -         0s       -          echo recuperado
+### kill -9 844  (Q-umplidor muere sin poder limpiar)
+### Procesos de trabajos vivos tras la caída: 4 (padres: [288, 850])
+
+Recuperación: el trabajo [1] seguía corriendo sin supervisión (pid 847); se detuvo con SIGTERM.
+Recuperación: el trabajo [2] seguía corriendo sin supervisión (pid 848); se detuvo con SIGKILL.
+Recuperación: el trabajo [3] seguía corriendo sin supervisión (pid 850); se detuvo con SIGTERM.
+>>> listar
+ID   ESTADO      ENVIADO   INICIO    FIN       ESPERA   EJECUCIÓN  COMANDO
+1    INTERRUPTED 21:19:09  21:19:09  21:19:11  0s       1s         sleep 600 &
+2    INTERRUPTED 21:19:10  21:19:10  21:19:12  0s       2s         ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &
+3    INTERRUPTED 21:19:10  21:19:10  21:19:12  0s       2s         sleep 601; echo fin
+4    SUCCEEDED   21:19:10  21:19:12  21:19:12  2s       0s         echo recuperado
+>>> estado 2
+[2] ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' & -> INTERRUPTED (Interrumpido)
+  Enviado:   2026-11-02 21:19:10
+  Inicio:    2026-11-02 21:19:10
+  Fin:       2026-11-02 21:19:12
+  Espera:    0s
+  Ejecución: 2s
+  Escalamiento: recuperación: proceso huérfano detenido; no respondió a SIGTERM, se forzó con SIGKILL
+>>> salida 4
+recuperado
+

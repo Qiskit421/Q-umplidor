@@ -1,0 +1,11 @@
+PASS  Sin procesos zombi hijos de Q-umplidor (después de reiniciar)
+PASS  Q-umplidor no deja archivos de data/ abiertos (después de reiniciar)
+PASS  Tras la caída quedaron procesos huérfanos (el escenario es real)  [4 procesos]
+PASS  Al reiniciar se detuvieron: ningún proceso de los trabajos sigue vivo
+PASS  Los 3 que corrían quedaron INTERRUPTED
+PASS  Se registró que eran huérfanos y con qué señal se detuvieron
+PASS  El que ignoraba SIGTERM se forzó con SIGKILL
+PASS  El trabajo en cola no se perdió: se retomó y terminó
+PASS  El contador de ID continúa (sin IDs repetidos)
+
+RESULTADO TC-025: PASS

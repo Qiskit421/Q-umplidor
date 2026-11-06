@@ -1,0 +1,9 @@
+PASS  Sin procesos zombi hijos de Q-umplidor (al terminar)
+PASS  Q-umplidor no deja archivos de data/ abiertos (al terminar)
+PASS  El trabajo colgado se detuvo solo y quedó FAILED (tiempo máximo excedido)
+PASS  Se forzó con SIGKILL porque ignoraba SIGTERM
+PASS  Se detuvo entre 2 y 4.5 s (límite + gracia)  [3.33s]
+PASS  Un trabajo corto no se ve afectado
+PASS  Se avisa en consola
+
+RESULTADO TC-023: PASS

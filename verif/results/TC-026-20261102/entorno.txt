@@ -1,0 +1,5 @@
+Caso: TC-026 — Cierre por SIGTERM / SIGHUP sin huérfanos (RF-13)
+Fecha: 2026-11-02T21:19:20
+Commit: 0cb78a9
+Entorno: Linux 6.18.54.1-microsoft-standard-WSL2, Python 3.14.4
+Configuración: {'Q_GRACIA_SIGTERM': '1'}

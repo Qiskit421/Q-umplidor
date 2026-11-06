@@ -4,6 +4,11 @@
 # Uso, desde la raíz del repositorio:  bash verif/scripts/prueba_cola.sh
 # Borra data/ (historial local de pruebas) antes de cada caso.
 set -u
+# Estos casos se escribieron para una cola que corre un trabajo a la vez. Desde
+# el límite de concurrencia (RF-05, ADR-0004) eso se fija con
+# Q_LIMITE_CONCURRENCIA=1; sin esto, con el límite por defecto (2) el trabajo 2
+# ya estaría corriendo y no se podría probar la cancelación en cola.
+export Q_LIMITE_CONCURRENCIA=1
 cd "$(dirname "$0")/../.."
 FECHA=$(date +%Y%m%d)
 COMMIT=$(git rev-parse --short HEAD)
@@ -33,11 +38,11 @@ rm -rf data
 INICIO_2=$(python3 -I -c 'import json; d=json.load(open("data/trabajos.json")); print([t for t in d["trabajos"] if t["id"]==2][0]["inicio"])')
 echo "inicio del trabajo 2 en trabajos.json: $INICIO_2" >> "$R/salida_consola.txt"
 if grep -q 'Trabajo \[2\] cancelado (estaba en cola' "$R/salida_consola.txt" \
-   && grep -q '\[2\] sleep 2 -> Cancelado' "$R/salida_consola.txt" \
+   && grep -qE '\[2\] sleep 2 -> (CANCELED|Cancelado)' "$R/salida_consola.txt" \
    && grep -q 'Trabajo \[4\] cancelado (estaba en cola' "$R/salida_consola.txt" \
    && ! grep -q 'ID: \[5\]' "$R/salida_consola.txt" \
    && grep -q 'Trabajo \[1\] cancelado' "$R/salida_consola.txt" \
-   && grep -qE '^3 +Terminado' "$R/salida_consola.txt" \
+   && grep -qE '^3 +(SUCCEEDED|Terminado)' "$R/salida_consola.txt" \
    && [ "$INICIO_2" = "None" ]; then
     echo "Resultado: PASS" >> "$R/entorno.txt"
 else
@@ -46,7 +51,7 @@ fi
 
 # ---------- TC-016: cola llena con capacidad 2 ----------
 R=verif/results/TC-016-$FECHA; mkdir -p "$R"; encabezado TC-016 "RF-25, RNF-29" "$R"
-echo "Configuración: Q_CAPACIDAD_COLA=2" >> "$R/entorno.txt"
+echo "Configuración: Q_CAPACIDAD_COLA=2, Q_LIMITE_CONCURRENCIA=1" >> "$R/entorno.txt"
 rm -rf data
 {
     printf 'queue sleep 3\n'

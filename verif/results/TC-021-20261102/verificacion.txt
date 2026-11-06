@@ -1,0 +1,15 @@
+PASS  Sin procesos zombi hijos de Q-umplidor (al terminar)
+PASS  Q-umplidor no deja archivos de data/ abiertos (al terminar)
+PASS  Se muestra QUEUED mientras espera por el límite
+PASS  Se muestra RUNNING mientras corre
+PASS  Código 0 -> SUCCEEDED
+PASS  Código 3 -> FAILED y codigo informa 3
+PASS  Cancelado en cola -> CANCELED sin haber arrancado
+PASS  Trabajo 1: envío <= inicio <= fin
+PASS  Trabajo 2: envío <= inicio <= fin
+PASS  Trabajo 3: envío <= inicio <= fin
+PASS  El trabajo 2 registró tiempo de espera en cola (>= 1 s)
+PASS  Ningún trabajo quedó en estado no final
+PASS  estado <id> muestra Enviado, Inicio, Fin, Espera y Ejecución
+
+RESULTADO TC-021: PASS

@@ -1,0 +1,81 @@
+{
+  "siguiente_id": 5,
+  "trabajos": [
+    {
+      "id": 1,
+      "comando": "sleep 300 &",
+      "inicio": 1793675935.6750746,
+      "fin": 1793675937.1902432,
+      "estado": "Cancelado",
+      "codigo": -15,
+      "es_cola": false,
+      "segundos_solicitados": null,
+      "momento_encolado": null,
+      "argumentos_cola": null,
+      "motivo_fin": "cancelado por el usuario",
+      "senal_final": "SIGTERM",
+      "huella": {
+        "pid": 809,
+        "inicio_proceso": 40527,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
+      }
+    },
+    {
+      "id": 2,
+      "comando": "ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &",
+      "inicio": 1793675935.8772705,
+      "fin": 1793675938.210261,
+      "estado": "Cancelado",
+      "codigo": -9,
+      "es_cola": false,
+      "segundos_solicitados": null,
+      "momento_encolado": null,
+      "argumentos_cola": null,
+      "motivo_fin": "cancelado por el usuario",
+      "senal_final": "SIGKILL",
+      "huella": {
+        "pid": 810,
+        "inicio_proceso": 40547,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
+      }
+    },
+    {
+      "id": 3,
+      "comando": "sleep 77; echo fin",
+      "inicio": 1793675936.0749798,
+      "fin": 1793675938.2124033,
+      "estado": "Cancelado",
+      "codigo": -15,
+      "es_cola": true,
+      "segundos_solicitados": 0,
+      "momento_encolado": 1793675936.0744638,
+      "argumentos_cola": "sleep 77; echo fin",
+      "motivo_fin": "cancelado por el usuario",
+      "senal_final": "SIGTERM",
+      "huella": {
+        "pid": 812,
+        "inicio_proceso": 40567,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
+      }
+    },
+    {
+      "id": 4,
+      "comando": "ejecutar bash -c 'sleep 88; echo x' &",
+      "inicio": 1793675936.2757826,
+      "fin": 1793675938.3136735,
+      "estado": "Cancelado",
+      "codigo": -15,
+      "es_cola": false,
+      "segundos_solicitados": null,
+      "momento_encolado": null,
+      "argumentos_cola": null,
+      "motivo_fin": "cancelado por el usuario",
+      "senal_final": "SIGTERM",
+      "huella": {
+        "pid": 814,
+        "inicio_proceso": 40587,
+        "boot_id": "6b5aa574-ea34-479b-a2e7-872074609ca6"
+      }
+    }
+  ]
+}

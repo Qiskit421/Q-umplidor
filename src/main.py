@@ -11,6 +11,12 @@ import atexit
 from collections import deque
 import event_log as ev
 
+# Parte de Ruy (Avance 02): RF-05, RF-06 y RF-30
+import concurrencia
+import escalamiento
+import estados
+import recuperacion
+
 if os.name == "nt":
     # Windows no tiene /proc ni grupos de procesos como Linux: se le pregunta
     # directamente con las funciones de kernel32 (ctypes viene con Python).
@@ -153,6 +159,7 @@ def archivos_abiertos_linux(carpeta):
 ARCHIVO_TRABAJOS = Path(__file__).resolve().parent.parent / "data" / "trabajos.json"
 CARPETA_SALIDAS = ARCHIVO_TRABAJOS.parent / "salidas"
 BITACORA = ev.EventLog(ARCHIVO_TRABAJOS.parent / "events.jsonl")
+politica = escalamiento.leer_politica()  # RF-30: gracia entre SIGTERM y SIGKILL, tiempo máximo
 
 def opciones_hijo(id_trabajo):
     """Opciones de Popen comunes a todos los trabajos.
@@ -201,16 +208,19 @@ def agrupar(proceso):
     return proceso
 
 
+escalamiento.usar_envio_de_senales(enviar_senal)
+
+
 def terminar_proceso(proceso):
-    """Termina el trabajo y todo su grupo, y recolecta al proceso hijo."""
-    enviar_senal(proceso)  # SIGTERM
-    try:
-        proceso.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        enviar_senal(proceso, forzar=True)  # SIGKILL si no respondió
-        proceso.wait()
+    """Termina el trabajo y todo su grupo, y recolecta al proceso hijo (RF-30).
+
+    Política de escalamiento: SIGTERM al grupo -> gracia -> SIGKILL.
+    Devuelve "SIGTERM" o "SIGKILL" según la señal que lo detuvo (None si ya había terminado).
+    """
+    senal = escalamiento.terminar_con_escalamiento(proceso, politica.gracia)
     # Si algún proceso del grupo ignoró SIGTERM y sigue vivo, no lo dejamos huérfano.
     enviar_senal(proceso, forzar=True)
+    return senal
 
 
 def rutas_salida(id_trabajo):
@@ -256,6 +266,8 @@ def registrar_trabajo(proceso, entrada):
         "estado": "En ejecución",
         "codigo": None,
         "cancelado": False,
+        # Para reconocer el proceso si Q-umplidor se cae (ADR-0006).
+        "huella": recuperacion.huella_proceso(proceso.pid),
     }
     extra = {} if duplicado is None else {"duplicado_de": duplicado}
     BITACORA.record(ev.JOB_STARTED, siguiente_id, pid=proceso.pid, comando=entrada, **extra)
@@ -285,7 +297,8 @@ CAPACIDAD_COLA = leer_capacidad_cola()
 cola_ids = deque()
 condicion_cola = threading.Condition()
 cola_cerrandose = False
-id_cola_activo = None
+ids_arrancando = set()  # trabajos de la cola que ya ocupan lugar pero aún no tienen proceso (RF-05)
+hilos_de_cola = []      # un hilo por trabajo de la cola; el cierre espera a que terminen
 
 
 def registrar_en_cola(comando, entrada):
@@ -335,86 +348,115 @@ def registrar_en_cola(comando, entrada):
         print(f"aviso: ya hay un trabajo activo con el mismo comando ([{duplicado}])")
 
 
-def procesar_cola():
-    """Ejecuta los comandos de queue de uno en uno, respetando el orden."""
-    global id_cola_activo
+def contar_activos():
+    """Trabajos que ocupan lugar: procesos vivos + los que la cola está arrancando (RF-05)."""
+    vivos = sum(
+        1 for trabajo in list(trabajos.values())
+        if trabajo.get("proceso") is not None and trabajo["proceso"].poll() is None
+    )
+    arrancando = sum(
+        1 for id_trabajo in list(ids_arrancando)
+        if trabajos.get(id_trabajo, {}).get("proceso") is None
+    )
+    return vivos + arrancando
+
+
+def despachar_cola():
+    """Saca trabajos de la cola en orden de llegada mientras haya lugar (RF-05).
+
+    Arranca tantos como permita el límite de concurrencia; cada uno corre en su
+    propio hilo, que solo espera a que su proceso termine.
+    """
     while True:
         with condicion_cola:
-            while not cola_ids and not cola_cerrandose:
-                condicion_cola.wait()
-            if cola_cerrandose:
-                return
+            while True:
+                if cola_cerrandose:
+                    return
+                if cola_ids and control_concurrencia.hay_espacio():
+                    break
+                # El timeout revisa de nuevo aunque nadie avise, por ejemplo
+                # cuando termina un trabajo lanzado con "&".
+                condicion_cola.wait(timeout=0.2)
             id_trabajo = cola_ids.popleft()
             trabajo = trabajos.get(id_trabajo)
             if trabajo is None or trabajo.get("cancelado"):
                 continue
-            id_cola_activo = id_trabajo
+            # Ocupa su lugar desde ya, antes de que exista el proceso.
+            ids_arrancando.add(id_trabajo)
+        hilo = threading.Thread(target=ejecutar_de_cola, args=(id_trabajo, trabajo), daemon=True)
+        hilos_de_cola.append(hilo)
+        hilo.start()
 
+
+def ejecutar_de_cola(id_trabajo, trabajo):
+    """Ejecuta un trabajo de la cola y registra su resultado."""
+    try:
+        with bloqueo_trabajos:
+            if trabajo["cancelado"] or cola_cerrandose:
+                return  # lo cancelaron, o el programa se está cerrando
+            trabajo["inicio"] = time.time()
+            trabajo["estado"] = "En ejecución"
+        guardar_trabajos()
+        # Los sleep de la cola se ejecutan con Python para que funcionen
+        # tanto en Windows como en Linux/WSL. Los demás comandos usan el shell.
+        CARPETA_SALIDAS.mkdir(parents=True, exist_ok=True)
+        ruta_out, ruta_err = rutas_salida(id_trabajo)
+        comando = trabajo["argumentos_cola"]
         try:
-            with bloqueo_trabajos:
-                if trabajo["cancelado"] or cola_cerrandose:
-                   continue  # lo cancelaron, o el programa se está cerrando 
-                trabajo["inicio"] = time.time()
-                trabajo["estado"] = "En ejecución"
-            guardar_trabajos()
-            # Los sleep de la cola se ejecutan con Python para que funcionen
-            # tanto en Windows como en Linux/WSL. Los demás comandos usan el shell.
-            CARPETA_SALIDAS.mkdir(parents=True, exist_ok=True)
-            ruta_out, ruta_err = rutas_salida(id_trabajo)
-            comando = trabajo["argumentos_cola"]
+            palabras = shlex.split(comando)
+        except ValueError:
+            palabras = []
+
+        argumentos_sleep = None
+        if len(palabras) == 2 and palabras[0] == "sleep":
             try:
-                palabras = shlex.split(comando)
+                segundos_sleep = int(palabras[1])
+                if segundos_sleep >= 0:
+                    argumentos_sleep = [
+                        sys.executable,
+                        "-c",
+                        f"import time; time.sleep({segundos_sleep})",
+                    ]
             except ValueError:
-                palabras = []
+                pass
 
-            argumentos_sleep = None
-            if len(palabras) == 2 and palabras[0] == "sleep":
-                try:
-                    segundos_sleep = int(palabras[1])
-                    if segundos_sleep >= 0:
-                        argumentos_sleep = [
-                            sys.executable,
-                            "-c",
-                            f"import time; time.sleep({segundos_sleep})",
-                        ]
-                except ValueError:
-                    pass
+        with ruta_out.open("wb") as salida, ruta_err.open("wb") as errores:
+            if argumentos_sleep is not None:
+                proceso = subprocess.Popen(
+                    argumentos_sleep,
+                    stdin=subprocess.DEVNULL,
+                    stdout=salida,
+                    stderr=errores,
+                    **opciones_hijo(id_trabajo),
+                )
+            else:
+                proceso = subprocess.Popen(
+                    comando,
+                    shell=True,
+                    executable="/bin/bash" if os.name == "posix" else None,
+                    stdin=subprocess.DEVNULL,
+                    stdout=salida,
+                    stderr=errores,
+                    **opciones_hijo(id_trabajo),
+                )
+            agrupar(proceso)
 
-            with ruta_out.open("wb") as salida, ruta_err.open("wb") as errores:
-                if argumentos_sleep is not None:
-                    proceso = subprocess.Popen(
-                        argumentos_sleep,
-                        stdin=subprocess.DEVNULL,
-                        stdout=salida,
-                        stderr=errores,
-                        **opciones_hijo(id_trabajo),
-                    )
-                else:
-                    proceso = subprocess.Popen(
-                        comando,
-                        shell=True,
-                        executable="/bin/bash" if os.name == "posix" else None,
-                        stdin=subprocess.DEVNULL,
-                        stdout=salida,
-                        stderr=errores,
-                        **opciones_hijo(id_trabajo),
-                    )
-                agrupar(proceso)
-
-            with bloqueo_trabajos:
-                trabajo["proceso"] = proceso
-                if cola_cerrandose:
-                    trabajo["interrumpido"] = True  # el programa se está cerrando
-                detener_ya = trabajo["cancelado"] or cola_cerrandose
-            if detener_ya:
-                terminar_proceso(proceso)  # lo cancelaron justo al iniciar
-            guardar_trabajos()
-            BITACORA.record(ev.JOB_STARTED, id_trabajo, pid=proceso.pid, comando=comando)
-            codigo = proceso.wait()
-            finalizar_trabajo(id_trabajo, trabajo, codigo)
-        finally:
-            with condicion_cola:
-                id_cola_activo = None
+        with bloqueo_trabajos:
+            trabajo["proceso"] = proceso
+            trabajo["huella"] = recuperacion.huella_proceso(proceso.pid)  # ADR-0006
+            if cola_cerrandose:
+                trabajo["interrumpido"] = True  # el programa se está cerrando
+            detener_ya = trabajo["cancelado"] or cola_cerrandose
+        if detener_ya:
+            terminar_proceso(proceso)  # lo cancelaron justo al iniciar
+        guardar_trabajos()
+        BITACORA.record(ev.JOB_STARTED, id_trabajo, pid=proceso.pid, comando=comando)
+        codigo = proceso.wait()
+        finalizar_trabajo(id_trabajo, trabajo, codigo)
+    finally:
+        with condicion_cola:
+            ids_arrancando.discard(id_trabajo)  # ya cuenta como proceso vivo, o no arrancó
+            condicion_cola.notify_all()          # se liberó un lugar
 
 
 def mostrar_cola():
@@ -459,7 +501,7 @@ def mostrar_cola():
         if trabajo.get("es_cola") and comando_mostrado.startswith("queue "):
             comando_mostrado = comando_mostrado[len("queue "):]
         print(
-            f"{id_trabajo:<5} {'':<12} {str(ruta_out.relative_to(Path(__file__).resolve().parent.parent)):<36} "
+            f"{id_trabajo:<5} {estados.estado_cliente(trabajo['estado']):<12} {str(ruta_out.relative_to(Path(__file__).resolve().parent.parent)):<36} "
             f"{codigo_texto:<9} {tiempo_texto:<20} {comando_mostrado}"
         )
 
@@ -519,8 +561,13 @@ def _guardar_trabajos():
                 "segundos_solicitados": trabajo.get("segundos_solicitados"),
                 "momento_encolado": trabajo.get("momento_encolado"),
                 "argumentos_cola": trabajo.get("argumentos_cola"),
+                "motivo_fin": trabajo.get("motivo_fin"),
+                "senal_final": trabajo.get("senal_final"),
+                "huella": trabajo.get("huella"),
             }
-            for id_trabajo, trabajo in trabajos.items()
+            # list(): con varios trabajos de la cola, otro hilo puede agregar
+            # un trabajo mientras se guarda.
+            for id_trabajo, trabajo in list(trabajos.items())
         ],
     }
     temporal = ARCHIVO_TRABAJOS.with_suffix(".tmp")
@@ -563,6 +610,9 @@ def cargar_trabajos():
                 "es_cola": registro.get("es_cola", False),
                 "segundos_solicitados": registro.get("segundos_solicitados"),
                 "momento_encolado": registro.get("momento_encolado"),
+                "motivo_fin": registro.get("motivo_fin"),
+                "senal_final": registro.get("senal_final"),
+                "huella": registro.get("huella"),
                 "argumentos_cola": (
                     " ".join(registro.get("argumentos_cola", []))
                     if isinstance(registro.get("argumentos_cola"), list)
@@ -580,10 +630,10 @@ def cargar_trabajos():
 
 trabajos, siguiente_id = cargar_trabajos()
 if any(trabajo["estado"] == "En ejecución" for trabajo in trabajos.values()):
-    for trabajo in trabajos.values():
-        if trabajo["estado"] == "En ejecución":
-            trabajo["estado"] = "Interrumpido"
-            trabajo["fin"] = time.time()
+    # Si la sesión anterior se cayó (kill -9), sus trabajos pueden seguir vivos:
+    # se detienen antes de marcarlos Interrumpido (ADR-0006).
+    for mensaje in recuperacion.recuperar_trabajos(trabajos, politica.gracia):
+        print(mensaje)
     guardar_trabajos()
 
 
@@ -642,14 +692,13 @@ def finalizar_trabajo(id_trabajo, trabajo, codigo):
         if trabajo.get("interrumpido"):
             trabajo["estado"] = "Interrumpido"
             evento = ev.JOB_INTERRUPTED
-        elif trabajo["cancelado"]:
-            trabajo["estado"] = "Cancelado"
-            evento = ev.JOB_CANCELLED
         else:
-            trabajo["estado"] = "Terminado" if codigo == 0 else f"Falló (código {codigo})"
-            evento = ev.JOB_FINISHED
+            # Una sola regla para todos los caminos (RF-06, RF-30).
+            trabajo["estado"] = estados.estado_final(trabajo, codigo)
+            evento = ev.JOB_CANCELLED if trabajo["estado"] == "Cancelado" else ev.JOB_FINISHED
         guardar_trabajos()
-        BITACORA.record(evento, id_trabajo, estado=trabajo["estado"], exit_code=codigo)
+        extra = {"motivo": trabajo["motivo_fin"]} if trabajo.get("motivo_fin") else {}
+        BITACORA.record(evento, id_trabajo, estado=trabajo["estado"], exit_code=codigo, **extra)
         return True
 
 
@@ -817,8 +866,59 @@ def obtener_id(partes, comando):
     return id_trabajo
 
 
-hilo_cola = threading.Thread(target=procesar_cola, daemon=True)
+def lanzar_o_encolar(argumentos, texto_cola, entrada):
+    """Trabajos con "&": arrancan ya si hay lugar; si no, esperan en la cola (RF-05).
+
+    Se revisa y se lanza bajo el mismo candado que usa el despachador, para que
+    los dos no ocupen el último lugar al mismo tiempo.
+    """
+    with condicion_cola:
+        if control_concurrencia.hay_espacio():
+            proceso = lanzar_trabajo(siguiente_id, argumentos)
+            registrar_trabajo(proceso, entrada)
+            return
+        cola_llena = len(cola_ids) >= CAPACIDAD_COLA
+    if cola_llena:
+        # registrar_en_cola() lo rechaza con su mensaje (RF-25); no se anuncia
+        # que "se envía a la cola" si de todos modos se va a rechazar.
+        registrar_en_cola(texto_cola, entrada)
+        return
+    print(
+        f"Límite de concurrencia alcanzado ({control_concurrencia.limite}); "
+        "se envía a la cola (QUEUED) hasta que se libere un lugar."
+    )
+    registrar_en_cola(texto_cola, entrada)
+
+
+def trabajos_en_ejecucion():
+    return [
+        (id_trabajo, trabajo)
+        for id_trabajo, trabajo in list(trabajos.items())
+        if trabajo.get("proceso") is not None and trabajo["proceso"].poll() is None
+    ]
+
+
+def al_detener_por_tiempo(id_trabajo, trabajo, senal):
+    estado_trabajo(trabajo)
+    detalle = "forzado con SIGKILL" if senal == "SIGKILL" else "terminó con SIGTERM"
+    print(f"\n[aviso] Trabajo [{id_trabajo}] superó el tiempo máximo y se detuvo ({detalle})")
+
+
+control_concurrencia = concurrencia.ControlConcurrencia(
+    concurrencia.leer_limite_concurrencia(), contar_activos
+)
+
+
+def avisar_despachador():
+    with condicion_cola:
+        condicion_cola.notify_all()
+
+
+hilo_cola = threading.Thread(target=despachar_cola, daemon=True)
 hilo_cola.start()
+escalamiento.iniciar_vigilante(
+    politica, trabajos_en_ejecucion, al_detener_por_tiempo, lambda: cola_cerrandose
+)
 
 cerrando = threading.Event()
 
@@ -903,13 +1003,18 @@ def liberar_recursos():
                 if proceso is not None:
                     trabajo["interrumpido"] = True
             if proceso is not None:
-                terminar_proceso(proceso)
+                senal = terminar_proceso(proceso)
+                if senal is not None:
+                    trabajo["senal_final"] = senal
+                    trabajo["motivo_fin"] = estados.MOTIVO_CIERRE
                 finalizar_trabajo(id_trabajo, trabajo, proceso.returncode)
 
     terminar_activos()
     # El hilo de la cola pudo estar lanzando un trabajo justo ahora: se espera a
     # que termine y se revisa otra vez para que ningún proceso quede vivo.
     hilo_cola.join(timeout=3)
+    for hilo in list(hilos_de_cola):
+        hilo.join(timeout=3)   # los que estaban arrancando terminan su proceso por su cuenta
     terminar_activos()
     barrido_final()   # escapados de su grupo, zombis y grupos de Windows
     guardar_trabajos()
@@ -966,9 +1071,21 @@ while True:
         print("  queue cancelar <id> Igual que cancelar <id>.")
         print("  salida <id>         Mostrar la salida estándar (stdout).")
         print("  errores <id>        Mostrar la salida de error (stderr).")
+        print("  limite              Ver el límite de concurrencia.")
+        print("  limite <N>          Cambiar el límite de concurrencia.")
+        print("  politica            Ver la política de escalamiento (SIGTERM -> SIGKILL).")
         print("  eventos [id]        Consultar la bitácora de eventos.")
         print("  recursos            Revisar procesos y archivos que siguen en uso.")
         print("  help                Mostrar esta ayuda.")
+
+    elif partes[0] == "limite":
+        concurrencia.atender_comando_limite(partes, control_concurrencia, avisar_despachador)
+
+    elif partes[0] == "politica":
+        if len(partes) != 1:
+            print("politica: no acepta argumentos. Uso: politica")
+            continue
+        escalamiento.mostrar_politica(politica)
 
     elif partes[0] == "queue":
         if len(partes) == 1:
@@ -1020,12 +1137,11 @@ while True:
         # Caso: sleep 10 &
         elif len(partes) == 3 and partes[2] == "&":
             try:
-                proceso = lanzar_trabajo(siguiente_id, [
-                    sys.executable,
-                    "-c",
-                    f"import time; time.sleep({segundos})"
-                ])
-                registrar_trabajo(proceso, entrada)
+                lanzar_o_encolar(
+                    [sys.executable, "-c", f"import time; time.sleep({segundos})"],
+                    f"sleep {segundos}",
+                    entrada,
+                )
             except (ValueError, OverflowError):
                 print("sleep: invalid time interval")
 
@@ -1040,12 +1156,11 @@ while True:
             print("ejecutar: uso: ejecutar <programa> [argumentos] &")
             continue
         try:
-            proceso = lanzar_trabajo(siguiente_id, argumentos[:-1])
+            lanzar_o_encolar(argumentos[:-1], shlex.join(argumentos[:-1]), entrada)
         except OSError as error:
             BITACORA.record(ev.JOB_REJECTED, comando=argumentos[0], motivo=error.strerror)
             print(f"ejecutar: no se pudo iniciar '{argumentos[0]}': {error.strerror}")
             continue
-        registrar_trabajo(proceso, entrada)
 
     # Mostrar stdout o stderr de un trabajo
     elif partes[0] in ("salida", "errores"):
@@ -1062,7 +1177,8 @@ while True:
         if id_trabajo is not None:
             trabajo = trabajos[id_trabajo]
             estado = estado_trabajo(trabajo)
-            print(f"[{id_trabajo}] {trabajo['comando']} -> {estado} ({tiempo_trabajo(trabajo)}s)")
+            for linea in estados.detalle_estado(id_trabajo, trabajo, estado):
+                print(linea)
 
     # Listar los trabajos
     elif partes[0] == "listar":
@@ -1072,14 +1188,10 @@ while True:
         if not trabajos:
             print("No hay trabajos registrados")
         else:
-            print(f"{'ID':<4} {'ESTADO':<20} {'TIEMPO':<8} COMANDO")
-            for id_trabajo, trabajo in trabajos.items():
+            print(estados.ENCABEZADO_LISTAR)
+            for id_trabajo, trabajo in list(trabajos.items()):
                 estado = estado_trabajo(trabajo)
-                transcurrido = tiempo_trabajo(trabajo)
-                print(
-                    f"{id_trabajo:<4} {estado:<20} "
-                    f"{transcurrido:<7}s {trabajo['comando']}"
-                )
+                print(estados.fila_listar(id_trabajo, trabajo, estado))
 
     # Obtener el código de salida de un trabajo
     elif partes[0] == "codigo":
@@ -1140,15 +1252,23 @@ while True:
                     print(f"Trabajo [{id_trabajo}] cancelado (estaba en cola)")
                 else:
                     trabajo["cancelado"] = True
+                    trabajo["motivo_fin"] = estados.MOTIVO_USUARIO
                     BITACORA.record(ev.JOB_CANCEL_REQUESTED, id_trabajo)
                     if proceso is None:
                         print(f"Trabajo [{id_trabajo}] se está iniciando; se cancelará en cuanto arranque")
                     else:
                         a_terminar = proceso
             if a_terminar is not None:
-                terminar_proceso(a_terminar)  # SIGTERM al grupo; SIGKILL si no responde
+                # Política de escalamiento (RF-30): SIGTERM -> gracia -> SIGKILL.
+                senal = terminar_proceso(a_terminar)
+                if senal is not None:
+                    trabajo["senal_final"] = senal
                 estado_trabajo(trabajo)
-                print(f"Trabajo [{id_trabajo}] cancelado")
+                if senal == "SIGKILL":
+                    print(f"Trabajo [{id_trabajo}] cancelado (no respondió a SIGTERM en "
+                          f"{politica.gracia:g}s, se forzó con SIGKILL)")
+                else:
+                    print(f"Trabajo [{id_trabajo}] cancelado")
 
        # Consultar la bitácora de eventos
     elif partes[0] == "eventos":

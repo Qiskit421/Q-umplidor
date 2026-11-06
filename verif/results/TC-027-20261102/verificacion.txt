@@ -1,0 +1,8 @@
+PASS  Sin procesos zombi hijos de Q-umplidor (al terminar)
+PASS  Q-umplidor no deja archivos de data/ abiertos (al terminar)
+PASS  Los dos envíos extra se rechazan explícitamente  [2]
+PASS  Un rechazo no anuncia antes que 'se envía a la cola'
+PASS  Los rechazados no se registran ni consumen ID
+PASS  Al salir, los aceptados quedan en estado final
+
+RESULTADO TC-027: PASS

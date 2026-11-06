@@ -25,5 +25,8 @@ La columna **Decisión** marca cuál de los tres fue cada uso.
 | IA-009 | 28/10/2026 | Oscar | Claude AI | `src/main.py`, `verif/scripts/prueba_cola.sh` | Cancelación en cola (RF-10) y rechazo con cola llena (RF-25) sobre la cola del PR #130 | Modificado |
 | IA-010 | 28/10/2026 | Oscar | Claude AI | `docs/incidents/INC-001.md`, guías | Redactar el incidente INC-001 y actualizar las guías con la cola | Aceptado |
 | IA-011 | 29/10/2026 | Oscar | Claude AI | `src/main.py`, `verif/scripts/prueba_cola.sh` | Alias `queue cancelar <id>` | Aceptado |
+| IA-012 | 30/10/2026 | Ruy Valle | Claude AI | `src/concurrencia.py`, `src/estados.py`, `src/escalamiento.py`, `src/main.py` | Límite de concurrencia (RF-05), estados y tiempos (RF-06) y escalamiento (RF-30) | Modificado |
+| IA-013 | 30/10/2026 | Ruy Valle | Claude AI | `docs/decisions/ADR-0004..0007.md`, `docs/technical-guide/ArquitecturaSistema.md` | ADR de concurrencia, persistencia, recuperación y cancelación; documento de arquitectura | Modificado |
+| IA-014 | 01/11/2026 | Ruy Valle | Claude AI | `src/recuperacion.py`, `verif/scripts/prueba_avance02_ruy.py`, `docs/incidents/INC-002.md` | Recuperar huérfanos tras `kill -9`, script de verificación TC-020..027 e incidente INC-002 | Modificado |
 
 > Para agregar una entrada: añade la fila aquí y su sección en `detalle-uso-ia.md` con el mismo ID.

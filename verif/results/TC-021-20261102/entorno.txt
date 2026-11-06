@@ -1,0 +1,5 @@
+Caso: TC-021 — Estados y tiempos coherentes (RF-06)
+Fecha: 2026-11-02T21:18:55
+Commit: 0cb78a9
+Entorno: Linux 6.18.54.1-microsoft-standard-WSL2, Python 3.14.4
+Configuración: {'Q_LIMITE_CONCURRENCIA': '1', 'Q_GRACIA_SIGTERM': '1'}

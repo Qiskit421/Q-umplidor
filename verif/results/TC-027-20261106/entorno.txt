@@ -1,0 +1,5 @@
+Caso: TC-027 — Saturación de la cola con el límite lleno (RF-25, RF-05, RNF-29)
+Fecha: 2026-11-06T10:10:51
+Commit: a97f6de
+Entorno: Linux 6.18.54.1-microsoft-standard-WSL2, Python 3.14.4
+Configuración: {'Q_LIMITE_CONCURRENCIA': '1', 'Q_CAPACIDAD_COLA': '2', 'Q_GRACIA_SIGTERM': '1'}

@@ -1,0 +1,43 @@
+{
+  "siguiente_id": 3,
+  "trabajos": [
+    {
+      "id": 1,
+      "comando": "ejecutar python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)' &",
+      "inicio": 1793981429.2313974,
+      "fin": 1793981432.5598862,
+      "estado": "Falló (tiempo máximo excedido)",
+      "codigo": -9,
+      "es_cola": false,
+      "segundos_solicitados": null,
+      "momento_encolado": null,
+      "argumentos_cola": null,
+      "motivo_fin": "tiempo máximo excedido",
+      "senal_final": "SIGKILL",
+      "huella": {
+        "pid": 740,
+        "inicio_proceso": 19249,
+        "boot_id": "b6b515a4-fcf8-4df1-9474-f6d09b9503f1"
+      }
+    },
+    {
+      "id": 2,
+      "comando": "sleep 1 &",
+      "inicio": 1793981429.3313842,
+      "fin": 1793981431.05679,
+      "estado": "Terminado",
+      "codigo": 0,
+      "es_cola": false,
+      "segundos_solicitados": null,
+      "momento_encolado": null,
+      "argumentos_cola": null,
+      "motivo_fin": null,
+      "senal_final": null,
+      "huella": {
+        "pid": 741,
+        "inicio_proceso": 19259,
+        "boot_id": "b6b515a4-fcf8-4df1-9474-f6d09b9503f1"
+      }
+    }
+  ]
+}
