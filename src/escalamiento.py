@@ -64,8 +64,24 @@ def leer_politica():
     )
 
 
+_envio_externo = None
+
+
+def usar_envio_de_senales(funcion):
+    """main.py registra aquí su propio enviar_senal(proceso, forzar).
+
+    Así el escalamiento y el resto del programa mandan las señales de la misma
+    forma (grupo de procesos en Linux/WSL, Job Object en Windows).
+    """
+    global _envio_externo
+    _envio_externo = funcion
+
+
 def _enviar_senal(proceso, forzar):
     """Manda SIGTERM (o SIGKILL si forzar) al grupo del trabajo."""
+    if _envio_externo is not None:
+        _envio_externo(proceso, forzar=forzar)
+        return
     if os.name != "posix":
         # Windows no tiene grupos POSIX ni SIGKILL; se usa lo que ofrece Popen.
         proceso.kill() if forzar else proceso.terminate()
@@ -148,47 +164,6 @@ def iniciar_vigilante(politica, trabajos_en_ejecucion, al_detener, debe_parar):
     hilo = threading.Thread(target=vigilar, daemon=True)
     hilo.start()
     return hilo
-
-
-# ------------------------------------------------ cierre por señal externa
-
-_cierre_solicitado = False
-
-
-def instalar_cierre_por_senal():
-    """SIGTERM y SIGHUP cierran Q-umplidor de forma ordenada.
-
-    Como cada trabajo tiene su propio grupo de procesos (start_new_session),
-    ya no recibe el SIGHUP de la terminal. Si Q-umplidor muriera con la
-    acción por defecto de esas señales, sus trabajos quedarían huérfanos
-    corriendo. Aquí la señal se convierte en KeyboardInterrupt para que el
-    ciclo principal salga y aplique el escalamiento a cada trabajo.
-    """
-    if os.name != "posix":
-        return
-
-    def manejador(numero, _marco):
-        global _cierre_solicitado
-        _cierre_solicitado = True
-        raise KeyboardInterrupt
-
-    signal.signal(signal.SIGTERM, manejador)
-    signal.signal(signal.SIGHUP, manejador)
-
-
-def cierre_solicitado():
-    return _cierre_solicitado
-
-
-def registrar_red_de_seguridad(trabajos_en_ejecucion, politica):
-    """Si Q-umplidor sale por un error inesperado, no deja trabajos huérfanos."""
-    import atexit
-
-    def limpiar():
-        for _id, trabajo in trabajos_en_ejecucion():
-            terminar_con_escalamiento(trabajo["proceso"], politica.gracia)
-
-    atexit.register(limpiar)
 
 
 def mostrar_politica(politica):

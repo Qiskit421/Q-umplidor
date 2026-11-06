@@ -50,7 +50,6 @@
 - **Resultado obtenido:** apareció `hola: comando no reconocido` y el programa continuó esperando comandos.
 
 
-<<<<<<< HEAD
 ---
 
 # Avance 02 — Concurrencia, estados, escalamiento y recuperación (integración y robustez)
@@ -144,7 +143,7 @@ python3 verif/scripts/prueba_avance02_ruy.py TC-025     # uno
 
 - **Entrada:** 2 trabajos corriendo (uno terco); se envía `kill -TERM` y, en otra corrida, `kill -HUP` a Q-umplidor. SIGHUP es la señal que llega al cerrar la terminal.
 - **Resultado esperado:**
-  - Q-umplidor sale con código 0.
+  - Q-umplidor sale en orden con código 128 + señal (143 con SIGTERM, 129 con SIGHUP).
   - Ningún proceso de los trabajos sigue vivo.
   - Ambos quedan `INTERRUPTED` con el motivo "cierre de Q-umplidor".
 - **Regresión de:** [INC-002](../../docs/incidents/INC-002.md).
@@ -157,7 +156,7 @@ python3 verif/scripts/prueba_avance02_ruy.py TC-025     # uno
   - Los dos envíos que no caben se rechazan con "cola llena (2/2 en espera)".
   - No se anuncia "se envía a la cola" antes del rechazo.
   - Los rechazados no se registran ni consumen ID.
-=======
+
 ## CP-009 — Registrar el arranque y cierre del sistema
 
 - **Entrada:** iniciar `python src/main.py` y salir con Ctrl+C.
@@ -173,7 +172,7 @@ python3 verif/scripts/prueba_avance02_ruy.py TC-025     # uno
 ## CP-011 — Ejecutar trabajos en cola uno por uno
 
 - **Entrada:** `queue sleep 3`, `queue sleep 2` y `queue sleep` (sin segundos), luego `queue`.
-- **Resultado esperado:** los trabajos se ejecutan en orden, de uno en uno, y cada uno deja `JOB_SUBMITTED`, `JOB_STARTED` y `JOB_FINISHED` en la bitácora.
+- **Resultado esperado:** los trabajos se ejecutan en orden, de uno en uno (con `Q_LIMITE_CONCURRENCIA=1`; con un límite mayor se ejecutan en paralelo, ver TC-020), y cada uno deja `JOB_SUBMITTED`, `JOB_STARTED` y `JOB_FINISHED` en la bitácora.
 - **Resultado obtenido:** cada `JOB_STARTED` aparece después del `JOB_FINISHED` del trabajo anterior. `queue` mostró los IDs 6 y 7 con código 0 (3.05 s y 2.05 s). El `queue sleep` sin segundos (ID 8) terminó con «Falló (código 1)», quedó registrado con exit_code 1 y la cola continuó.
 
 ## CP-012 — Cancelar un trabajo en ejecución con registro
@@ -229,4 +228,3 @@ python3 verif/scripts/prueba_avance02_ruy.py TC-025     # uno
 - **Entrada:** `python -m unittest discover -s verif/test-cases -v`.
 - **Resultado esperado:** pasan las pruebas de orden de eventos, filtro por trabajo, continuidad de la secuencia, línea corrupta y escritura desde varios hilos.
 - **Resultado obtenido:** `Ran 5 tests` con resultado `OK`.
->>>>>>> origin/main

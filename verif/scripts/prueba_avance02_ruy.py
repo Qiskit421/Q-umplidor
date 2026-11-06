@@ -417,8 +417,9 @@ def tc026():
         restos = vivos_de_grupos(grupos)
         c.guardar(q)
         d = q.datos()
-        c.check(f"{senal.name}: Q-umplidor sale en orden (código 0)", q.p.returncode == 0,
-                q.p.returncode)
+        # Cierre por señal (cerrar_por_senal): sale con 128 + número de señal (143 / 129).
+        c.check(f"{senal.name}: Q-umplidor sale en orden (código {128 + int(senal)})",
+                q.p.returncode == 128 + int(senal), q.p.returncode)
         c.check(f"{senal.name}: ningún trabajo queda vivo", not restos, restos)
         c.check(f"{senal.name}: ambos quedan INTERRUPTED con motivo de cierre",
                 all(t["estado"] == "Interrumpido" and t.get("motivo_fin") == "cierre de Q-umplidor"

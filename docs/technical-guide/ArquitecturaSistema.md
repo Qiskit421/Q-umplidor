@@ -55,7 +55,7 @@ flowchart TD
 | `main.py` | Consola interactiva, tabla de trabajos, lanzamiento de procesos, cola, despachador y persistencia | `lanzar_trabajo`, `registrar_trabajo`, `registrar_en_cola`, `despachar_cola`, `ejecutar_de_cola`, `lanzar_o_encolar`, `actualizar_trabajo`, `guardar_trabajos`, `cargar_trabajos` |
 | `concurrencia.py` | Leer, validar y cambiar el límite; decidir si hay lugar | `leer_limite_concurrencia`, `ControlConcurrencia.hay_espacio`, `atender_comando_limite` |
 | `estados.py` | Estados del cliente, regla del estado final, tiempos y presentación | `estado_cliente`, `estado_final`, `tiempo_espera`, `tiempo_ejecucion`, `detalle_estado`, `fila_listar` |
-| `escalamiento.py` | Detener trabajos (SIGTERM → gracia → SIGKILL), tiempo máximo, cierre por señal | `terminar_con_escalamiento`, `detener_trabajo`, `iniciar_vigilante`, `instalar_cierre_por_senal` |
+| `escalamiento.py` | Detener trabajos (SIGTERM → gracia → SIGKILL), tiempo máximo | `terminar_con_escalamiento`, `detener_trabajo`, `iniciar_vigilante` |
 | `recuperacion.py` | Reconocer y detener al arrancar los trabajos que quedaron vivos tras una caída | `huella_proceso`, `sigue_vivo`, `detener_huerfano`, `recuperar_trabajos` |
 
 **Regla de dependencias:** `main.py` usa a los otros tres; ellos no conocen a `main.py`. Lo que necesitan del estado global (contar trabajos activos, listar los que están corriendo) lo reciben como funciones. Así cada módulo se puede leer y probar por separado.
@@ -195,7 +195,7 @@ Un valor inválido detiene el arranque con un mensaje claro.
 | RF-03 Cola | `registrar_en_cola`, `despachar_cola` | 0004 |
 | RF-04 Ejecución sin bloquear | Procesos con `Popen`, hilos ejecutores | 0004 |
 | RF-05 Límite de concurrencia | `concurrencia.py`, `contar_activos`, `lanzar_o_encolar` | 0004 |
-| RF-06 Estados y tiempos | `estados.py`, `registrar_terminados` | 0004, 0005 |
+| RF-06 Estados y tiempos | `estados.py`, `recolectar_terminados` | 0004, 0005 |
 | RF-10 Cancelación | `escalamiento.detener_trabajo` (+ cancelación en cola, Oscar) | 0007 |
 | RF-11 stdout/stderr separados | `lanzar_trabajo`, `data/salidas/` | 0005 |
 | RF-12 / RF-13 Persistencia y recuperación | `guardar_trabajos`, `cargar_trabajos`, `recuperacion.py` | 0005, 0006 |

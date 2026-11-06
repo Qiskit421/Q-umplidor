@@ -61,7 +61,7 @@ stateDiagram-v2
 
 1. Solo se avanza: no hay regreso desde un estado final.
 2. `SUCCEEDED`, `FAILED`, `CANCELED` e `INTERRUPTED` son **finales**.
-3. **Ningún trabajo se reporta `RUNNING` sin un proceso que lo respalde.** Los trabajos con `&` se revisan cada 0.2 s (`registrar_terminados`) y los de la cola tienen un hilo que espera su proceso.
+3. **Ningún trabajo se reporta `RUNNING` sin un proceso que lo respalde.** Un hilo recolector (`recolectar_terminados`) revisa los procesos cada 0.5 s, y cada trabajo de la cola tiene además un hilo que espera su proceso.
 4. **Ningún trabajo se reporta `INTERRUPTED` con su proceso vivo.** Al reiniciar, si el proceso sigue vivo (misma huella), primero se detiene ([INC-002](../incidents/INC-002.md)).
 5. `CANCELED` solo ocurre si el usuario lo pidió. Una señal externa o el tiempo máximo dan `FAILED`.
 6. Un estado final se decide en un solo lugar, `estados.estado_final()`, para que todos los caminos den el mismo resultado.
@@ -73,7 +73,7 @@ stateDiagram-v2
 |---|---|
 | Envío | Al aceptar el trabajo (`momento_encolado`, o `inicio` si arrancó directo) |
 | Inicio | Al crear el proceso |
-| Fin | Al terminar, cancelarse o interrumpirse; con precisión de 0.2 s para los trabajos con `&` |
+| Fin | Al terminar, cancelarse o interrumpirse; con precisión de 0.5 s (hilo recolector) |
 | Espera | inicio − envío (tiempo en `QUEUED`) |
 | Ejecución | fin − inicio (tiempo en `RUNNING`) |
 
