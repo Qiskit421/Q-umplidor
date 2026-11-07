@@ -169,3 +169,23 @@ Cada entrada responde seis cosas, como pide el estándar del cliente (doc. 04): 
   - El caso 7 de `test_avance1_completo.py` (IA-003) ya fallaba en `main`: cancelaba el trabajo 1 y luego esperaba que `codigo 1` diera 0. Ahora consulta el trabajo 2, que termina normal. Queda 8/8.
 - **Prueba agregada:** TC-024, TC-025 y TC-026; regresión de INC-002.
 - **Aprendizaje:** un script de verificación también hay que verificarlo: debe fallar con el código que tiene el error.
+
+## IA-015 — Ajustes al comando `queue`
+
+- **Integrante:** Misael
+- **Objetivo:** que `queue` muestre solo los trabajos de la cola, separados de los del Avance 01.
+- **Resultado recibido:** sugerencias para separar los trabajos de la cola y darles su propia numeración.
+- **Revisión realizada:** se probó en la terminal con trabajos de la cola y de afuera al mismo tiempo.
+- **Cambios aplicados:** se tomaron solo las sugerencias que funcionaron en las pruebas y se ajustaron al código existente.
+- **Prueba agregada:** CI-01 y CI-08.
+- **Aprendizaje:** separar la cola evita que los comandos del Avance 01 afecten a los trabajos de la cola.
+
+## IA-016 — Revisión de `queue` y sus comandos
+
+- **Integrante:** Misael
+- **Objetivo:** Comprobar que `queue`, `queue clear`, y los comandos siguientes funcionen bien en la cola (echo, sleep y python...)
+- **Resultado recibido:** sugerencias para corregir detalles encontrados al probar, como que `queue clear` no reiniciaba los IDs o que se aceptaban comillas sin cerrar.
+- **Revisión realizada:** se probó cada comando en la terminal.
+- **Cambios aplicados:** se aplicaron las correcciones que se comprobaron en las pruebas; se rechazó la idea de guardar la cola en un archivo aparte porque no era necesaria.
+- **Prueba agregada:** CI-02, CI-06, CR-07 y CR-10.
+- **Aprendizaje:** probar los comandos como los usaría el usuario ayuda a encontrar fallas.
