@@ -28,5 +28,7 @@ La columna **Decisión** marca cuál de los tres fue cada uso.
 | IA-012 | 30/10/2026 | Ruy Valle | Claude AI | `src/concurrencia.py`, `src/estados.py`, `src/escalamiento.py`, `src/main.py` | Límite de concurrencia (RF-05), estados y tiempos (RF-06) y escalamiento (RF-30) | Modificado |
 | IA-013 | 30/10/2026 | Ruy Valle | Claude AI | `docs/decisions/ADR-0004..0007.md`, `docs/technical-guide/ArquitecturaSistema.md` | ADR de concurrencia, persistencia, recuperación y cancelación; documento de arquitectura | Modificado |
 | IA-014 | 01/11/2026 | Ruy Valle | Claude AI | `src/recuperacion.py`, `verif/scripts/prueba_avance02_ruy.py`, `docs/incidents/INC-002.md` | Recuperar huérfanos tras `kill -9`, script de verificación TC-020..027 e incidente INC-002 | Modificado |
+| IA-015 | 06/11/2026 | Misael | Claude AI | `src/main.py` | Apoyo para ajustar cómo el comando `queue` muestra la cola | Modificado |
+| IA-016 | 06/11/2026 | Misael | Claude AI | `src/main.py` | Apoyo para revisar `queue` y sus comandos (`queue cancelar`, `queue clear`, `salida`, `errores`) | Modificado |
 
 > Para agregar una entrada: añade la fila aquí y su sección en `detalle-uso-ia.md` con el mismo ID.
