@@ -117,7 +117,8 @@ def procesos_linux(carpeta_datos):
     """Lee de /proc los procesos: lista de (pid, ppid, estado, id de trabajo o None).
 
     El id sale de la variable QUMPLIDOR_TRABAJO que heredan los procesos de cada
-    trabajo; solo cuenta si QUMPLIDOR_DATOS es esta misma carpeta de datos.
+    trabajo ("3" fuera de la cola, "cola-3" en la cola); solo cuenta si
+    QUMPLIDOR_DATOS es esta misma carpeta de datos.
     """
     datos = f"QUMPLIDOR_DATOS={carpeta_datos}".encode()
     encontrados = []
@@ -138,7 +139,7 @@ def procesos_linux(carpeta_datos):
         if datos in variables:
             for variable in variables:
                 if variable.startswith(b"QUMPLIDOR_TRABAJO="):
-                    id_trabajo = int(variable.split(b"=", 1)[1])
+                    id_trabajo = variable.split(b"=", 1)[1].decode()
         encontrados.append((int(carpeta.name), int(campos[1]), campos[0], id_trabajo))
     return encontrados
 
@@ -161,7 +162,12 @@ CARPETA_SALIDAS = ARCHIVO_TRABAJOS.parent / "salidas"
 BITACORA = ev.EventLog(ARCHIVO_TRABAJOS.parent / "events.jsonl")
 politica = escalamiento.leer_politica()  # RF-30: gracia entre SIGTERM y SIGKILL, tiempo máximo
 
-def opciones_hijo(id_trabajo):
+def marca_trabajo(id_trabajo, de_cola):
+    """Nombre único de un trabajo: la cola y lo de afuera tienen su propia numeración."""
+    return f"cola-{id_trabajo}" if de_cola else str(id_trabajo)
+
+
+def opciones_hijo(id_trabajo, de_cola=False):
     """Opciones de Popen comunes a todos los trabajos.
 
     Cada trabajo corre en su propio grupo de procesos. En Linux/WSL así la señal
@@ -175,7 +181,7 @@ def opciones_hijo(id_trabajo):
     opciones = {
         "env": {
             **os.environ,
-            "QUMPLIDOR_TRABAJO": str(id_trabajo),
+            "QUMPLIDOR_TRABAJO": marca_trabajo(id_trabajo, de_cola),
             "QUMPLIDOR_DATOS": str(ARCHIVO_TRABAJOS.parent),
         }
     }
@@ -223,40 +229,35 @@ def terminar_proceso(proceso):
     return senal
 
 
-def rutas_salida(id_trabajo):
-    """Cada trabajo tiene dos archivos: uno para stdout y otro para stderr."""
+def rutas_salida(id_trabajo, de_cola=False):
+    """Cada trabajo tiene dos archivos: uno para stdout y otro para stderr.
+
+    Los de la cola llevan el prefijo "cola-" porque su numeración es aparte.
+    """
+    nombre = marca_trabajo(id_trabajo, de_cola)
     return (
-        CARPETA_SALIDAS / f"{id_trabajo}.out",
-        CARPETA_SALIDAS / f"{id_trabajo}.err",
+        CARPETA_SALIDAS / f"{nombre}.out",
+        CARPETA_SALIDAS / f"{nombre}.err",
     )
 
 
 def lanzar_trabajo(id_trabajo, argumentos):
-    """Lanza el proceso hijo con stdout y stderr redirigidos a archivos separados."""
-    CARPETA_SALIDAS.mkdir(parents=True, exist_ok=True)
-    ruta_out, ruta_err = rutas_salida(id_trabajo)
-    # El hijo recibe su propia copia de los descriptores. El padre cierra los
-    # suyos al salir del "with" para no dejar archivos abiertos.
-    try:
-        with ruta_out.open("wb") as salida, ruta_err.open("wb") as errores:
-            return agrupar(subprocess.Popen(
-                argumentos,
-                stdin=subprocess.DEVNULL,
-                stdout=salida,
-                stderr=errores,
-                **opciones_hijo(id_trabajo),
-            ))
-    except OSError:
-        # Si el programa no existe, no dejamos archivos de un trabajo que nunca se registró.
-        ruta_out.unlink(missing_ok=True)
-        ruta_err.unlink(missing_ok=True)
-        raise
+    """Lanza un trabajo de afuera (Avance 01) en segundo plano.
+
+    Todo lo del Avance 02 (captura de salidas, grupos de procesos, bitácora,
+    duplicados, escalamiento, persistencia) es solo de la cola.
+    """
+    return subprocess.Popen(
+        argumentos,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def registrar_trabajo(proceso, entrada):
-    """Guarda el trabajo recién lanzado y muestra su ID."""
+    """Guarda el trabajo de afuera recién lanzado (solo en memoria) y muestra su ID."""
     global siguiente_id
-    duplicado = buscar_duplicado(entrada)
     trabajos[siguiente_id] = {
         "id": siguiente_id,
         "proceso": proceso,
@@ -266,17 +267,28 @@ def registrar_trabajo(proceso, entrada):
         "estado": "En ejecución",
         "codigo": None,
         "cancelado": False,
-        # Para reconocer el proceso si Q-umplidor se cae (ADR-0006).
-        "huella": recuperacion.huella_proceso(proceso.pid),
     }
-    extra = {} if duplicado is None else {"duplicado_de": duplicado}
-    BITACORA.record(ev.JOB_STARTED, siguiente_id, pid=proceso.pid, comando=entrada, **extra)
+    # Espera al proceso para anotar la hora real en que termina; si no, el fin
+    # quedaría en el momento en que alguien lo consulta con listar o estado.
+    threading.Thread(
+        target=lambda t=trabajos[siguiente_id], i=siguiente_id: finalizar_trabajo(i, t, proceso.wait()),
+        daemon=True,
+    ).start()
     print(f"ID: [{siguiente_id}]")
-    if duplicado is not None:
-        print(f"aviso: ya hay un trabajo activo con el mismo comando ([{duplicado}])")
     siguiente_id += 1
-    guardar_trabajos()
-    
+
+
+def terminar_trabajo_afuera(trabajo):
+    """Cancela un trabajo de afuera como en el Avance 01: terminate y, si no responde, kill."""
+    proceso = trabajo["proceso"]
+    proceso.terminate()
+    try:
+        proceso.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        proceso.kill()
+        proceso.wait()
+
+
 # Capacidad máxima de trabajos esperando en la cola (RF-25). Se configura con la
 # variable de entorno Q_CAPACIDAD_COLA, por ejemplo: Q_CAPACIDAD_COLA=3 python3 src/main.py
 def leer_capacidad_cola():
@@ -303,7 +315,7 @@ hilos_de_cola = []      # un hilo por trabajo de la cola; el cierre espera a que
 
 def registrar_en_cola(comando, entrada):
     """Registra cualquier comando pendiente y lo agrega al final de la cola."""
-    global siguiente_id
+    global siguiente_id_cola
     with condicion_cola:
         en_espera = len(cola_ids)
     if en_espera >= CAPACIDAD_COLA:
@@ -312,8 +324,8 @@ def registrar_en_cola(comando, entrada):
         print(f"queue: cola llena ({en_espera}/{CAPACIDAD_COLA} en espera), trabajo rechazado. "
               "Intenta de nuevo cuando avance la cola.")
         return
-    id_trabajo = siguiente_id
-    duplicado = buscar_duplicado(entrada)
+    id_trabajo = siguiente_id_cola
+    duplicado = buscar_duplicado(entrada, de_cola=True)
     extra = {} if duplicado is None else {"duplicado_de": duplicado}
     # Los archivos de salida se crean hasta que el trabajo arranca; si se cancela
     # estando en cola no deja archivos vacíos.
@@ -328,7 +340,7 @@ def registrar_en_cola(comando, entrada):
             segundos = max(0, int(palabras[1]))
         except ValueError:
             pass
-    trabajos[id_trabajo] = {
+    trabajos_cola[id_trabajo] = {
         "id": id_trabajo,
         "proceso": None, "comando": entrada, "argumentos_cola": comando,
         "inicio": None, "fin": None, "estado": "En cola", "codigo": None,
@@ -336,7 +348,7 @@ def registrar_en_cola(comando, entrada):
         "segundos_solicitados": segundos,
         "momento_encolado": time.time(),
     }
-    siguiente_id += 1
+    siguiente_id_cola += 1
     guardar_trabajos()
     BITACORA.record(ev.JOB_SUBMITTED, id_trabajo, comando=comando, **extra)
 
@@ -349,14 +361,17 @@ def registrar_en_cola(comando, entrada):
 
 
 def contar_activos():
-    """Trabajos que ocupan lugar: procesos vivos + los que la cola está arrancando (RF-05)."""
+    """Trabajos de la cola que ocupan lugar: procesos vivos + los que está arrancando (RF-05).
+
+    Los trabajos fuera de la cola (sleep N &, ejecutar) no cuentan para el límite.
+    """
     vivos = sum(
-        1 for trabajo in list(trabajos.values())
+        1 for trabajo in list(trabajos_cola.values())
         if trabajo.get("proceso") is not None and trabajo["proceso"].poll() is None
     )
     arrancando = sum(
         1 for id_trabajo in list(ids_arrancando)
-        if trabajos.get(id_trabajo, {}).get("proceso") is None
+        if trabajos_cola.get(id_trabajo, {}).get("proceso") is None
     )
     return vivos + arrancando
 
@@ -378,7 +393,7 @@ def despachar_cola():
                 # cuando termina un trabajo lanzado con "&".
                 condicion_cola.wait(timeout=0.2)
             id_trabajo = cola_ids.popleft()
-            trabajo = trabajos.get(id_trabajo)
+            trabajo = trabajos_cola.get(id_trabajo)
             if trabajo is None or trabajo.get("cancelado"):
                 continue
             # Ocupa su lugar desde ya, antes de que exista el proceso.
@@ -400,7 +415,7 @@ def ejecutar_de_cola(id_trabajo, trabajo):
         # Los sleep de la cola se ejecutan con Python para que funcionen
         # tanto en Windows como en Linux/WSL. Los demás comandos usan el shell.
         CARPETA_SALIDAS.mkdir(parents=True, exist_ok=True)
-        ruta_out, ruta_err = rutas_salida(id_trabajo)
+        ruta_out, ruta_err = rutas_salida(id_trabajo, de_cola=True)
         comando = trabajo["argumentos_cola"]
         try:
             palabras = shlex.split(comando)
@@ -427,7 +442,7 @@ def ejecutar_de_cola(id_trabajo, trabajo):
                     stdin=subprocess.DEVNULL,
                     stdout=salida,
                     stderr=errores,
-                    **opciones_hijo(id_trabajo),
+                    **opciones_hijo(id_trabajo, de_cola=True),
                 )
             else:
                 proceso = subprocess.Popen(
@@ -437,7 +452,7 @@ def ejecutar_de_cola(id_trabajo, trabajo):
                     stdin=subprocess.DEVNULL,
                     stdout=salida,
                     stderr=errores,
-                    **opciones_hijo(id_trabajo),
+                    **opciones_hijo(id_trabajo, de_cola=True),
                 )
             agrupar(proceso)
 
@@ -461,11 +476,6 @@ def ejecutar_de_cola(id_trabajo, trabajo):
 
 def mostrar_cola():
     """Muestra los trabajos registrados en la cola."""
-    trabajos_cola = [
-        (id_trabajo, trabajo)
-        for id_trabajo, trabajo in trabajos.items()
-        if trabajo.get("es_cola")
-    ]
     if not trabajos_cola:
         print("La cola está vacía.")
         return
@@ -473,7 +483,7 @@ def mostrar_cola():
     print(f"{'ID':<5} {'Estado':<12} {'Salida':<36} {'E-Level':<9} {'Tiempo':<20} Comando")
     tiempo_acumulado = 0
     ahora = time.time()
-    for id_trabajo, trabajo in trabajos_cola:
+    for id_trabajo, trabajo in list(trabajos_cola.items()):
         segundos = trabajo.get("segundos_solicitados", 0)
         inicio = trabajo.get("inicio")
         fin = trabajo.get("fin")
@@ -495,7 +505,7 @@ def mostrar_cola():
         elif inicio is None and trabajo.get("estado") == "En cola":
             tiempo_acumulado += segundos
 
-        ruta_out, _ = rutas_salida(id_trabajo)
+        ruta_out, _ = rutas_salida(id_trabajo, de_cola=True)
         codigo_texto = "" if codigo is None else ("-1" if codigo != 0 else "0")
         comando_mostrado = trabajo["comando"]
         if trabajo.get("es_cola") and comando_mostrado.startswith("queue "):
@@ -506,31 +516,53 @@ def mostrar_cola():
         )
 
 
-def limpiar_salidas_terminadas():
-    """queue clear: borra los .out/.err de los trabajos que ya terminaron.
+def limpiar_cola_terminados():
+    """queue clear: borra los trabajos terminados de la cola, sus .out/.err y trabajos.json.
 
-    Los trabajos en cola o en ejecución conservan sus archivos porque siguen en uso.
-    El historial (trabajos.json) no se modifica.
+    Los trabajos en cola o en ejecución se conservan porque siguen en uso.
+    Si la cola queda vacía, trabajos.json se borra y no se vuelve a crear hasta
+    el siguiente trabajo de la cola, así que sus IDs empiezan otra vez en 1.
+    Los trabajos de afuera (Avance 01) no se tocan. La bitácora se conserva.
     """
-    borrados = []
-    for id_trabajo, trabajo in list(trabajos.items()):
-        estado_trabajo(trabajo)  # refresca si acaba de terminar
-        if trabajo["fin"] is None:
-            continue
-        for ruta in rutas_salida(id_trabajo):
-            if ruta.exists():
-                ruta.unlink(missing_ok=True)
-                borrados.append(ruta.name)
-    if borrados:
-        BITACORA.record(ev.OUTPUT_FILES_CLEARED, archivos=sorted(borrados))
-        print(f"queue clear: se borraron {len(borrados)} archivos de salida de trabajos terminados")
+    global siguiente_id_cola
+    quitados, borrados = [], []
+    with bloqueo_trabajos:
+        for id_trabajo, trabajo in list(trabajos_cola.items()):
+            estado_trabajo(trabajo)  # refresca si acaba de terminar
+            if trabajo["fin"] is None:
+                continue
+            grupo = trabajo.get("grupo_windows")
+            if grupo is not None:
+                grupo.terminar()
+                grupo.cerrar()
+            for ruta in rutas_salida(id_trabajo, de_cola=True):
+                if ruta.exists():
+                    ruta.unlink(missing_ok=True)
+                    borrados.append(ruta.name)
+            del trabajos_cola[id_trabajo]
+            quitados.append(id_trabajo)
+        # Salidas que ya no pertenecen a ningún trabajo (por ejemplo, de una versión anterior).
+        for ruta in salidas_huerfanas():
+            ruta.unlink(missing_ok=True)
+            borrados.append(ruta.name)
+        json_borrado = False
+        if not trabajos_cola:
+            json_borrado = ARCHIVO_TRABAJOS.exists()
+            siguiente_id_cola = 1
+            with bloqueo_guardado:
+                ARCHIVO_TRABAJOS.unlink(missing_ok=True)
+        elif quitados:
+            guardar_trabajos()
+    if quitados or borrados or json_borrado:
+        BITACORA.record(ev.OUTPUT_FILES_CLEARED, trabajos=quitados, archivos=sorted(borrados))
+        print("queue clear: se borraron los trabajos terminados de la cola y sus salidas")
     else:
-        print("queue clear: no hay archivos de salida de trabajos terminados")
+        print("queue clear: no hay trabajos terminados en la cola")
 
 
 def mostrar_archivo(id_trabajo, indice, comando, descripcion):
-    """Muestra el contenido de stdout (indice 0) o stderr (indice 1) de un trabajo."""
-    ruta = rutas_salida(id_trabajo)[indice]
+    """Muestra el contenido de stdout (indice 0) o stderr (indice 1) de un trabajo de la cola."""
+    ruta = rutas_salida(id_trabajo, de_cola=True)[indice]
     if not ruta.exists():
         print(f"{comando}: el trabajo [{id_trabajo}] no tiene {descripcion} registrada")
         return
@@ -544,58 +576,93 @@ def mostrar_archivo(id_trabajo, indice, comando, descripcion):
 bloqueo_guardado = threading.Lock()
 bloqueo_trabajos = threading.RLock()
 
-def _guardar_trabajos():
-    """Guarda el historial y el siguiente ID sin escribir objetos Popen."""
-    ARCHIVO_TRABAJOS.parent.mkdir(parents=True, exist_ok=True)
-    datos = {
-        "siguiente_id": siguiente_id,
-        "trabajos": [
-            {
-                "id": id_trabajo,
-                "comando": trabajo["comando"],
-                "inicio": trabajo["inicio"],
-                "fin": trabajo["fin"],
-                "estado": trabajo["estado"],
-                "codigo": trabajo["codigo"],
-                "es_cola": trabajo.get("es_cola", False),
-                "segundos_solicitados": trabajo.get("segundos_solicitados"),
-                "momento_encolado": trabajo.get("momento_encolado"),
-                "argumentos_cola": trabajo.get("argumentos_cola"),
-                "motivo_fin": trabajo.get("motivo_fin"),
-                "senal_final": trabajo.get("senal_final"),
-                "huella": trabajo.get("huella"),
-            }
-            # list(): con varios trabajos de la cola, otro hilo puede agregar
-            # un trabajo mientras se guarda.
-            for id_trabajo, trabajo in list(trabajos.items())
-        ],
+def _registro(id_trabajo, trabajo):
+    """Datos de un trabajo que se guardan en el JSON (sin objetos Popen)."""
+    return {
+        "id": id_trabajo,
+        "comando": trabajo["comando"],
+        "inicio": trabajo["inicio"],
+        "fin": trabajo["fin"],
+        "estado": trabajo["estado"],
+        "codigo": trabajo["codigo"],
+        "es_cola": trabajo.get("es_cola", False),
+        "segundos_solicitados": trabajo.get("segundos_solicitados"),
+        "momento_encolado": trabajo.get("momento_encolado"),
+        "argumentos_cola": trabajo.get("argumentos_cola"),
+        "motivo_fin": trabajo.get("motivo_fin"),
+        "senal_final": trabajo.get("senal_final"),
+        "huella": trabajo.get("huella"),
     }
-    temporal = ARCHIVO_TRABAJOS.with_suffix(".tmp")
+
+
+def _escribir_json(ruta, datos):
+    """Escribe el JSON completo de una vez para no dejarlo a medias."""
+    temporal = ruta.with_suffix(".tmp")
     try:
         with temporal.open("w", encoding="utf-8") as archivo:
             json.dump(datos, archivo, ensure_ascii=False, indent=2)
-        os.replace(temporal, ARCHIVO_TRABAJOS)
+        # En Windows el reemplazo falla si otro programa tiene el archivo
+        # abierto en ese instante: se reintenta un momento.
+        for intento in range(20):
+            try:
+                os.replace(temporal, ruta)
+                break
+            except PermissionError:
+                if intento == 19:
+                    raise
+                time.sleep(0.05)
     finally:
         temporal.unlink(missing_ok=True)
 
 
+def _guardar_trabajos():
+    """Guarda los trabajos de la cola y su siguiente ID sin escribir objetos Popen.
+
+    Solo la cola (Avance 02) tiene persistencia: los trabajos de afuera viven
+    mientras el programa está abierto. Sin trabajos en la cola no hay nada que
+    guardar, así trabajos.json no reaparece al salir después de queue clear.
+    """
+    if not trabajos_cola:
+        return
+    ARCHIVO_TRABAJOS.parent.mkdir(parents=True, exist_ok=True)
+    _escribir_json(ARCHIVO_TRABAJOS, {
+        "siguiente_id": siguiente_id_cola,
+        # list(): con varios trabajos de la cola, otro hilo puede agregar
+        # un trabajo mientras se guarda.
+        "trabajos": [_registro(i, trabajo) for i, trabajo in list(trabajos_cola.items())],
+    })
+
+
 def guardar_trabajos():
-    """Evita que el hilo de la cola y el hilo principal escriban a la vez."""
+    """Evita que el hilo de la cola y el hilo principal escriban a la vez.
+
+    Si aun así no se puede guardar, avisa en lugar de cerrar el programa.
+    """
     with bloqueo_guardado:
-        _guardar_trabajos()
+        try:
+            _guardar_trabajos()
+        except OSError as error:
+            print(f"\n[aviso] no se pudo guardar el historial: {error}")
 
 
 def cargar_trabajos():
-    """Recupera el historial; una ejecución anterior ya no puede supervisarse."""
-    if not ARCHIVO_TRABAJOS.exists():
-        return {}, 1
+    """Recupera el historial; una ejecución anterior ya no puede supervisarse.
 
+    Solo se recuperan los trabajos de la cola; los de afuera empiezan vacíos
+    y su numeración vuelve a 1 en cada sesión.
+    """
+    afuera, cola = {}, {}
+    ruta = ARCHIVO_TRABAJOS
+    if not ruta.exists():
+        return afuera, cola, 1, 1
     try:
-        with ARCHIVO_TRABAJOS.open(encoding="utf-8") as archivo:
+        with ruta.open(encoding="utf-8") as archivo:
             datos = json.load(archivo)
-        recuperados = {}
         for registro in datos["trabajos"]:
             id_trabajo = registro["id"]
+            if not registro.get("es_cola", False):
+                continue  # de una versión anterior: lo de afuera no se recupera
+            recuperados = cola
             if not isinstance(id_trabajo, int) or id_trabajo < 1 or id_trabajo in recuperados:
                 raise ValueError("ID inválido o repetido")
             recuperados[id_trabajo] = {
@@ -619,34 +686,46 @@ def cargar_trabajos():
                     else registro.get("argumentos_cola", registro.get("comando", "").partition(" ")[2])
                 ),
             }
-        proximo = datos["siguiente_id"]
-        if not isinstance(proximo, int) or proximo < 1:
+        # Versiones anteriores guardaban el de la cola aparte, en "siguiente_id_cola".
+        proximo_cola = datos.get("siguiente_id_cola", datos["siguiente_id"])
+        if not isinstance(proximo_cola, int) or proximo_cola < 1:
             raise ValueError("contador de ID inválido")
     except (OSError, ValueError, KeyError, TypeError) as error:
-        raise SystemExit(f"No se pudo cargar {ARCHIVO_TRABAJOS}: {error}") from error
+        raise SystemExit(f"No se pudo cargar {ruta}: {error}") from error
+    return afuera, cola, 1, max(proximo_cola, max(cola, default=0) + 1)
 
-    return recuperados, max(proximo, max(recuperados, default=0) + 1)
+
+trabajos, trabajos_cola, siguiente_id, siguiente_id_cola = cargar_trabajos()
 
 
-trabajos, siguiente_id = cargar_trabajos()
-if any(trabajo["estado"] == "En ejecución" for trabajo in trabajos.values()):
-    # Si la sesión anterior se cayó (kill -9), sus trabajos pueden seguir vivos:
-    # se detienen antes de marcarlos Interrumpido (ADR-0006).
-    for mensaje in recuperacion.recuperar_trabajos(trabajos, politica.gracia):
-        print(mensaje)
-    guardar_trabajos()
+def todos_los_trabajos():
+    """Los trabajos de los dos lados, para lo que revisa el programa completo."""
+    return list(trabajos.values()) + list(trabajos_cola.values())
+
+
+for _lado in (trabajos, trabajos_cola):
+    if any(trabajo["estado"] == "En ejecución" for trabajo in _lado.values()):
+        # Si la sesión anterior se cayó (kill -9), sus trabajos pueden seguir vivos:
+        # se detienen antes de marcarlos Interrumpido (ADR-0006).
+        for mensaje in recuperacion.recuperar_trabajos(_lado, politica.gracia):
+            print(mensaje)
+        guardar_trabajos()
 
 
 def salidas_huerfanas():
     """Archivos .out/.err que no pertenecen a ningún trabajo del historial."""
     if not CARPETA_SALIDAS.exists():
         return []
-    return [
-        ruta
-        for ruta in CARPETA_SALIDAS.iterdir()
-        if ruta.suffix in (".out", ".err")
-        and not (ruta.stem.isdigit() and int(ruta.stem) in trabajos)
-    ]
+    huerfanas = []
+    for ruta in CARPETA_SALIDAS.iterdir():
+        if ruta.suffix not in (".out", ".err"):
+            continue
+        nombre, lado = ruta.stem, trabajos
+        if nombre.startswith("cola-"):
+            nombre, lado = nombre[len("cola-"):], trabajos_cola
+        if not (nombre.isdigit() and int(nombre) in lado):
+            huerfanas.append(ruta)
+    return huerfanas
 
 
 def limpiar_salidas_huerfanas():
@@ -665,13 +744,13 @@ def limpiar_salidas_huerfanas():
 
 
 limpiar_salidas_huerfanas()
-BITACORA.record(ev.SYSTEM_STARTED, trabajos_previos=len(trabajos))
+BITACORA.record(ev.SYSTEM_STARTED, trabajos_previos=len(trabajos) + len(trabajos_cola))
 atexit.register(lambda: BITACORA.record(ev.SYSTEM_STOPPED))
 
 
 # Recupera trabajos queue que quedaron pendientes de una sesión anterior.
-for _id, _trabajo in trabajos.items():
-    if _trabajo.get("es_cola") and _trabajo.get("estado") == "En cola":
+for _id, _trabajo in trabajos_cola.items():
+    if _trabajo.get("estado") == "En cola":
         cola_ids.append(_id)
 
 def finalizar_trabajo(id_trabajo, trabajo, codigo):
@@ -679,6 +758,20 @@ def finalizar_trabajo(id_trabajo, trabajo, codigo):
     with bloqueo_trabajos:
         if trabajo["fin"] is not None:
             return False  # otro hilo ya lo cerró
+        if not trabajo.get("es_cola"):
+            # Afuera (Avance 01): sin bitácora ni persistencia, como en el Avance 01.
+            trabajo["proceso"] = None
+            trabajo["codigo"] = codigo
+            trabajo["fin"] = time.time()
+            if trabajo.get("interrumpido"):
+                trabajo["estado"] = "Interrumpido"
+            elif trabajo["cancelado"]:
+                trabajo["estado"] = "Cancelado"
+            elif codigo == 0:
+                trabajo["estado"] = "Terminado"
+            else:
+                trabajo["estado"] = f"Falló (código {codigo})"
+            return True
         if trabajo["proceso"] is not None:
             # Si el trabajo dejó procesos en segundo plano (p. ej. "sleep 100 & echo hola"),
             # se terminan con él para que no queden huérfanos.
@@ -719,11 +812,14 @@ def normalizar_comando(texto):
     return " ".join(texto.split())
 
 
-def buscar_duplicado(comando):
-    """Devuelve el ID de un trabajo activo con el mismo comando, o None."""
+def buscar_duplicado(comando, de_cola):
+    """Devuelve el ID de un trabajo activo con el mismo comando, o None.
+
+    Solo compara dentro del mismo lado: la cola o fuera de ella.
+    """
     buscado = normalizar_comando(comando)
     with bloqueo_trabajos:
-        for id_existente, existente in trabajos.items():
+        for id_existente, existente in list((trabajos_cola if de_cola else trabajos).items()):
             estado_trabajo(existente)  # refresca si ya terminó
             if (
                 existente["fin"] is None
@@ -754,7 +850,7 @@ def codigo_salida_shell(codigo):
 def revisar_recursos_windows():
     """Igual que revisar_recursos_linux, pero preguntando a Windows."""
     vivos, zombis, huerfanos, abiertos = [], [], [], []
-    for id_trabajo, trabajo in list(trabajos.items()):
+    for id_trabajo, trabajo in list(trabajos_cola.items()):
         proceso = trabajo["proceso"]
         if proceso is not None:
             if termino_sin_recolectar(proceso):
@@ -765,12 +861,14 @@ def revisar_recursos_windows():
         elif trabajo.get("grupo_windows") is not None:
             huerfanos += [id_trabajo] * trabajo["grupo_windows"].activos()
 
-    # Archivos que Q-umplidor ya no debería tener abiertos nadie: historial,
-    # bitácora y salidas de trabajos que no están corriendo.
-    revisar = [ARCHIVO_TRABAJOS, ARCHIVO_TRABAJOS.with_suffix(".tmp"), ARCHIVO_TRABAJOS.parent / "events.jsonl"]
-    for id_trabajo, trabajo in list(trabajos.items()):
+    # Archivos que nadie debería tener abiertos: las salidas de los trabajos de la
+    # cola que no están corriendo (lo de afuera no guarda salidas). trabajos.json y
+    # events.jsonl no se revisan: abrirlos para revisarlos impediría que otro hilo
+    # los guarde en ese mismo instante.
+    revisar = []
+    for id_trabajo, trabajo in list(trabajos_cola.items()):
         if trabajo["proceso"] is None:
-            revisar += list(rutas_salida(id_trabajo))
+            revisar += list(rutas_salida(id_trabajo, de_cola=True))
     revisar += salidas_huerfanas()
     for ruta in revisar:
         if ruta.exists() and archivo_abierto(ruta):
@@ -782,19 +880,20 @@ def revisar_recursos_linux():
     """Lee de /proc qué procesos y archivos de Q-umplidor siguen en uso."""
     por_pid = {
         trabajo["proceso"].pid: id_trabajo
-        for id_trabajo, trabajo in list(trabajos.items())
+        for id_trabajo, trabajo in list(trabajos_cola.items())
         if trabajo["proceso"] is not None
     }
     vivos, zombis, huerfanos = [], [], []
-    for pid, ppid, estado, id_trabajo in procesos_linux(ARCHIVO_TRABAJOS.parent):
+    for pid, ppid, estado, marca in procesos_linux(ARCHIVO_TRABAJOS.parent):
         if estado == "Z":
             # Un zombi ya no tiene variables; se identifica por ser hijo de Q-umplidor.
-            if ppid == os.getpid():
-                zombis.append(por_pid.get(pid))
+            if ppid == os.getpid() and pid in por_pid:
+                zombis.append(por_pid[pid])
             continue
-        if id_trabajo is None:
+        if marca is None or not marca.startswith("cola-"):
             continue
-        trabajo = trabajos.get(id_trabajo)
+        id_trabajo = int(marca[len("cola-"):])
+        trabajo = trabajos_cola.get(id_trabajo)
         if trabajo is not None and trabajo["fin"] is None:
             vivos.append(id_trabajo)
         else:
@@ -804,7 +903,7 @@ def revisar_recursos_linux():
 
 
 def mostrar_recursos():
-    """Revisa en el sistema qué procesos y archivos de Q-umplidor siguen en uso.
+    """Revisa en el sistema qué procesos y archivos de la cola siguen en uso.
 
     No recolecta nada antes de revisar: si hay zombis, es porque el recolector
     no hizo su trabajo, y deben verse.
@@ -824,7 +923,7 @@ def mostrar_recursos():
 
     # Cuántos trabajos hay detrás de los números, para que un 0 se lea como "0 de N".
     por_estado = {}
-    for trabajo in list(trabajos.values()):
+    for trabajo in list(trabajos_cola.values()):
         estado = trabajo["estado"]
         grupo = "fallidos" if estado.startswith("Falló") else {
             "En cola": "en cola", "En ejecución": "en ejecución", "Terminado": "terminados",
@@ -836,7 +935,7 @@ def mostrar_recursos():
     else:
         detalle = "todavía no se ha lanzado ninguno"
 
-    print(f"Trabajos revisados .......... {len(trabajos)}   ({detalle})")
+    print(f"Trabajos revisados .......... {len(trabajos_cola)}   ({detalle})")
     print(f"Procesos hijos vivos ........ {len(vivos)}{detalle_ids(vivos)}")
     print(f"Procesos zombi .............. {len(zombis)}{detalle_ids(zombis)}")
     print(f"Procesos huérfanos .......... {len(huerfanos)}{detalle_ids(huerfanos)}")
@@ -844,8 +943,12 @@ def mostrar_recursos():
     print(f"Archivos de salida huérfanos  {len(sin_trabajo)}{detalle_archivos(sin_trabajo)}")
 
 
-def obtener_id(partes, comando):
-    """Valida que el comando traiga un ID válido y que exista. Devuelve el ID o None."""
+def obtener_id(partes, comando, de_cola):
+    """Valida que el comando traiga un ID válido y que exista. Devuelve el ID o None.
+
+    Los comandos de la cola (Avance 02) solo ven trabajos de la cola, y los del
+    Avance 01 solo ven los que se lanzaron fuera de ella.
+    """
     if len(partes) == 1:
         print(f"{comando}: falta el ID del trabajo. Uso: {comando} <id>")
         return None
@@ -859,41 +962,19 @@ def obtener_id(partes, comando):
         print(f"{comando}: el ID debe ser un número")
         return None
 
-    if id_trabajo not in trabajos:
-        print(f"{comando}: no existe el trabajo [{id_trabajo}]")
+    if id_trabajo not in (trabajos_cola if de_cola else trabajos):
+        donde = " en la cola" if de_cola else ""
+        print(f"{comando}: no existe el trabajo [{id_trabajo}]{donde}")
         return None
 
     return id_trabajo
 
 
-def lanzar_o_encolar(argumentos, texto_cola, entrada):
-    """Trabajos con "&": arrancan ya si hay lugar; si no, esperan en la cola (RF-05).
-
-    Se revisa y se lanza bajo el mismo candado que usa el despachador, para que
-    los dos no ocupen el último lugar al mismo tiempo.
-    """
-    with condicion_cola:
-        if control_concurrencia.hay_espacio():
-            proceso = lanzar_trabajo(siguiente_id, argumentos)
-            registrar_trabajo(proceso, entrada)
-            return
-        cola_llena = len(cola_ids) >= CAPACIDAD_COLA
-    if cola_llena:
-        # registrar_en_cola() lo rechaza con su mensaje (RF-25); no se anuncia
-        # que "se envía a la cola" si de todos modos se va a rechazar.
-        registrar_en_cola(texto_cola, entrada)
-        return
-    print(
-        f"Límite de concurrencia alcanzado ({control_concurrencia.limite}); "
-        "se envía a la cola (QUEUED) hasta que se libere un lugar."
-    )
-    registrar_en_cola(texto_cola, entrada)
-
-
 def trabajos_en_ejecucion():
+    """Trabajos de la cola vivos: el tiempo máximo (RF-30) es solo de la cola."""
     return [
         (id_trabajo, trabajo)
-        for id_trabajo, trabajo in list(trabajos.items())
+        for id_trabajo, trabajo in list(trabajos_cola.items())
         if trabajo.get("proceso") is not None and trabajo["proceso"].poll() is None
     ]
 
@@ -901,7 +982,7 @@ def trabajos_en_ejecucion():
 def al_detener_por_tiempo(id_trabajo, trabajo, senal):
     estado_trabajo(trabajo)
     detalle = "forzado con SIGKILL" if senal == "SIGKILL" else "terminó con SIGTERM"
-    print(f"\n[aviso] Trabajo [{id_trabajo}] superó el tiempo máximo y se detuvo ({detalle})")
+    print(f"\n[aviso] Trabajo [{id_trabajo}] de la cola superó el tiempo máximo y se detuvo ({detalle})")
 
 
 control_concurrencia = concurrencia.ControlConcurrencia(
@@ -924,13 +1005,14 @@ cerrando = threading.Event()
 
 
 def recolectar_terminados():
-    """Recoge cada medio segundo los trabajos que terminaron para que no queden zombis.
+    """Recoge cada medio segundo los trabajos de la cola que terminaron para que no queden zombis.
 
     Sin esto, un hijo terminado sigue como <defunct> hasta que alguien consulta
-    su estado con estado, listar, codigo o cancelar.
+    su estado. Es parte de la liberación de recursos del Avance 02: lo de afuera
+    se actualiza como en el Avance 01, al consultarlo.
     """
     while not cerrando.wait(0.5):
-        for trabajo in list(trabajos.values()):
+        for trabajo in list(trabajos_cola.values()):
             if trabajo["proceso"] is not None:
                 actualizar_trabajo(trabajo)
             grupo = trabajo.get("grupo_windows")
@@ -945,7 +1027,7 @@ hilo_recolector.start()
 def barrido_final():
     """Último recurso: mata y recolecta lo que haya quedado de Q-umplidor."""
     if os.name == "nt":
-        for trabajo in list(trabajos.values()):
+        for trabajo in todos_los_trabajos():
             grupo = trabajo.get("grupo_windows")
             if grupo is not None:
                 grupo.terminar()
@@ -996,13 +1078,18 @@ def liberar_recursos():
         condicion_cola.notify_all()
 
     def terminar_activos():
-        for id_trabajo, trabajo in list(trabajos.items()):
+        for trabajo in todos_los_trabajos():
+            id_trabajo = trabajo["id"]
             estado_trabajo(trabajo)
             with bloqueo_trabajos:
                 proceso = trabajo["proceso"]
                 if proceso is not None:
                     trabajo["interrumpido"] = True
-            if proceso is not None:
+            if proceso is not None and not trabajo.get("es_cola"):
+                # Afuera (Avance 01): al salir se terminan como antes, sin escalamiento.
+                terminar_trabajo_afuera(trabajo)
+                finalizar_trabajo(id_trabajo, trabajo, proceso.returncode)
+            elif proceso is not None:
                 senal = terminar_proceso(proceso)
                 if senal is not None:
                     trabajo["senal_final"] = senal
@@ -1046,10 +1133,13 @@ while True:
     if len(partes) == 0:
         continue
 
-    # "queue cancelar <id>" es un alias de "cancelar <id>". Sin esto, queue lo
-    # formaría como un comando de bash llamado "cancelar" y no cancelaría nada.
+    # "queue cancelar <id>" cancela trabajos de la cola; "cancelar <id>" solo los
+    # de fuera de ella. Sin esto, queue lo formaría como un comando de bash
+    # llamado "cancelar" y no cancelaría nada.
+    desde_cola = False
     if len(partes) >= 2 and partes[0] == "queue" and partes[1] == "cancelar":
         partes = partes[1:]
+        desde_cola = True
 
     if partes[0] == "help":
         if len(partes) != 1:
@@ -1061,16 +1151,16 @@ while True:
         print("  estado <id>         Consultar el estado de un trabajo.")
         print("  listar              Listar los trabajos registrados.")
         print("  codigo <id>         Consultar el código de salida.")
-        print("  cancelar <id>       Cancelar un trabajo en ejecución o en cola.")
+        print("  cancelar <id>       Cancelar un trabajo en ejecución.")
 
         print("\n-------------------- AVANCE 02 --------------------\n")
 
         print("  queue <comando>     Ejecutar echo, sleep (&) o un programa en cola.")
         print("  queue               Mostrar la cola de trabajos.")
-        print("  queue clear         Borrar los archivos de salida de trabajos terminados.")
-        print("  queue cancelar <id> Igual que cancelar <id>.")
-        print("  salida <id>         Mostrar la salida estándar (stdout).")
-        print("  errores <id>        Mostrar la salida de error (stderr).")
+        print("  queue clear         Quitar de la cola los trabajos terminados y sus salidas.")
+        print("  queue cancelar <id> Cancelar un trabajo de la cola.")
+        print("  salida <id>         Mostrar la salida estándar (stdout) de un trabajo de la cola.")
+        print("  errores <id>        Mostrar la salida de error (stderr) de un trabajo de la cola.")
         print("  limite              Ver el límite de concurrencia.")
         print("  limite <N>          Cambiar el límite de concurrencia.")
         print("  politica            Ver la política de escalamiento (SIGTERM -> SIGKILL).")
@@ -1093,7 +1183,7 @@ while True:
             continue
         # Sin esto, "queue clear" se encolaría como el comando de bash "clear".
         if len(partes) == 2 and partes[1] == "clear":
-            limpiar_salidas_terminadas()
+            limpiar_cola_terminados()
             continue
 
         comando_cola = entrada.partition(" ")[2].strip()
@@ -1106,6 +1196,11 @@ while True:
             comando_cola = comando_cola[:-1].rstrip()
         if not comando_cola:
             print("queue: debes indicar un comando después de queue")
+            continue
+        try:
+            shlex.split(comando_cola)
+        except ValueError:
+            print("queue: comillas sin cerrar")
             continue
         registrar_en_cola(comando_cola, comando_cola)
 
@@ -1137,11 +1232,10 @@ while True:
         # Caso: sleep 10 &
         elif len(partes) == 3 and partes[2] == "&":
             try:
-                lanzar_o_encolar(
-                    [sys.executable, "-c", f"import time; time.sleep({segundos})"],
-                    f"sleep {segundos}",
-                    entrada,
+                proceso = lanzar_trabajo(
+                    siguiente_id, [sys.executable, "-c", f"import time; time.sleep({segundos})"]
                 )
+                registrar_trabajo(proceso, entrada)
             except (ValueError, OverflowError):
                 print("sleep: invalid time interval")
 
@@ -1156,7 +1250,8 @@ while True:
             print("ejecutar: uso: ejecutar <programa> [argumentos] &")
             continue
         try:
-            lanzar_o_encolar(argumentos[:-1], shlex.join(argumentos[:-1]), entrada)
+            proceso = lanzar_trabajo(siguiente_id, argumentos[:-1])
+            registrar_trabajo(proceso, entrada)
         except OSError as error:
             BITACORA.record(ev.JOB_REJECTED, comando=argumentos[0], motivo=error.strerror)
             print(f"ejecutar: no se pudo iniciar '{argumentos[0]}': {error.strerror}")
@@ -1164,7 +1259,7 @@ while True:
 
     # Mostrar stdout o stderr de un trabajo
     elif partes[0] in ("salida", "errores"):
-        id_trabajo = obtener_id(partes, partes[0])
+        id_trabajo = obtener_id(partes, partes[0], de_cola=True)
         if id_trabajo is not None:
             if partes[0] == "salida":
                 mostrar_archivo(id_trabajo, 0, "salida", "la salida estándar")
@@ -1173,25 +1268,29 @@ while True:
 
     # Consulta el estado de un trabajo
     elif partes[0] == "estado":
-        id_trabajo = obtener_id(partes, "estado")
+        id_trabajo = obtener_id(partes, "estado", de_cola=False)
         if id_trabajo is not None:
             trabajo = trabajos[id_trabajo]
             estado = estado_trabajo(trabajo)
-            for linea in estados.detalle_estado(id_trabajo, trabajo, estado):
-                print(linea)
+            print(f"[{id_trabajo}] {trabajo['comando']} -> {estado} ({tiempo_trabajo(trabajo)}s)")
 
     # Listar los trabajos
     elif partes[0] == "listar":
         if len(partes) != 1:
             print("listar: no acepta argumentos. Uso: listar")
             continue
+        # La cola tiene su propio listado (queue); aquí solo van los de fuera.
         if not trabajos:
             print("No hay trabajos registrados")
         else:
-            print(estados.ENCABEZADO_LISTAR)
+            print(f"{'ID':<4} {'ESTADO':<20} {'TIEMPO':<8} COMANDO")
             for id_trabajo, trabajo in list(trabajos.items()):
                 estado = estado_trabajo(trabajo)
-                print(estados.fila_listar(id_trabajo, trabajo, estado))
+                transcurrido = tiempo_trabajo(trabajo)
+                print(
+                    f"{id_trabajo:<4} {estado:<20} "
+                    f"{transcurrido:<7}s {trabajo['comando']}"
+                )
 
     # Obtener el código de salida de un trabajo
     elif partes[0] == "codigo":
@@ -1219,9 +1318,20 @@ while True:
 
 # Solicitud de cancelación
     elif partes[0] == "cancelar":
-        id_trabajo = obtener_id(partes, "cancelar")
-        if id_trabajo is not None:
+        id_trabajo = obtener_id(partes, "cancelar", de_cola=desde_cola)
+        if id_trabajo is not None and not desde_cola:
+            # Afuera: la cancelación del Avance 01, sin bitácora ni escalamiento.
             trabajo = trabajos[id_trabajo]
+            estado = estado_trabajo(trabajo)
+            if trabajo["proceso"] is None:
+                print(f"cancelar: el trabajo [{id_trabajo}] ya terminó ({estado})")
+            else:
+                trabajo["cancelado"] = True
+                terminar_trabajo_afuera(trabajo)
+                estado_trabajo(trabajo)
+                print(f"Trabajo [{id_trabajo}] cancelado")
+        elif id_trabajo is not None:
+            trabajo = trabajos_cola[id_trabajo]
             estado_trabajo(trabajo)  # refresca si el proceso ya terminó
             a_terminar = None
             with bloqueo_trabajos:
@@ -1245,7 +1355,7 @@ while True:
                         except ValueError:
                             pass  # el hilo de la cola ya lo había sacado
                     guardar_trabajos()
-                    for ruta in rutas_salida(id_trabajo):
+                    for ruta in rutas_salida(id_trabajo, de_cola=True):
                         ruta.unlink(missing_ok=True)  # nunca corrió: no conserva archivos
                     BITACORA.record(ev.JOB_CANCEL_REQUESTED, id_trabajo)
                     BITACORA.record(ev.JOB_CANCELLED, id_trabajo, estado="Cancelado", antes="En cola")
