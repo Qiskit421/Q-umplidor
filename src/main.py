@@ -159,6 +159,40 @@ def archivos_abiertos_linux(carpeta):
 
 ARCHIVO_TRABAJOS = Path(__file__).resolve().parent.parent / "data" / "trabajos.json"
 CARPETA_SALIDAS = ARCHIVO_TRABAJOS.parent / "salidas"
+
+
+def bloquear_instancia():
+    """Impide abrir dos Q-umplidor sobre la misma carpeta data.
+
+    Si hubiera dos, cada uno marcaría como interrumpidos los trabajos que el
+    otro sigue ejecutando. El candado se libera solo al cerrar el programa.
+    """
+    ARCHIVO_TRABAJOS.parent.mkdir(parents=True, exist_ok=True)
+    candado = open(ARCHIVO_TRABAJOS.parent / "q-umplidor.lock", "a+")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            candado.seek(0)
+            msvcrt.locking(candado.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(candado, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        candado.close()
+        raise SystemExit("Q-umplidor ya está abierto en otra terminal. Ciérralo antes de abrirlo de nuevo.")
+    return candado
+
+
+def borrar_archivo(ruta):
+    """Borra un archivo; si otro proceso lo tiene abierto (Windows), devuelve False en vez de fallar."""
+    try:
+        ruta.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
+CANDADO = bloquear_instancia()
 BITACORA = ev.EventLog(ARCHIVO_TRABAJOS.parent / "events.jsonl")
 politica = escalamiento.leer_politica()  # RF-30: gracia entre SIGTERM y SIGKILL, tiempo máximo
 
@@ -525,7 +559,7 @@ def limpiar_cola_terminados():
     Los trabajos de afuera (Avance 01) no se tocan. La bitácora se conserva.
     """
     global siguiente_id_cola
-    quitados, borrados = [], []
+    quitados, borrados, ocupados = [], [], []
     with bloqueo_trabajos:
         for id_trabajo, trabajo in list(trabajos_cola.items()):
             estado_trabajo(trabajo)  # refresca si acaba de terminar
@@ -535,28 +569,33 @@ def limpiar_cola_terminados():
             if grupo is not None:
                 grupo.terminar()
                 grupo.cerrar()
-            for ruta in rutas_salida(id_trabajo, de_cola=True):
-                if ruta.exists():
-                    ruta.unlink(missing_ok=True)
-                    borrados.append(ruta.name)
+            rutas = [ruta for ruta in rutas_salida(id_trabajo, de_cola=True) if ruta.exists()]
+            if not all(borrar_archivo(ruta) for ruta in rutas):
+                # Algún proceso todavía tiene abierta su salida: el trabajo se conserva.
+                ocupados.append(id_trabajo)
+                continue
+            borrados += [ruta.name for ruta in rutas]
             del trabajos_cola[id_trabajo]
             quitados.append(id_trabajo)
         # Salidas que ya no pertenecen a ningún trabajo (por ejemplo, de una versión anterior).
         for ruta in salidas_huerfanas():
-            ruta.unlink(missing_ok=True)
-            borrados.append(ruta.name)
+            if borrar_archivo(ruta):
+                borrados.append(ruta.name)
         json_borrado = False
         if not trabajos_cola:
             json_borrado = ARCHIVO_TRABAJOS.exists()
             siguiente_id_cola = 1
             with bloqueo_guardado:
-                ARCHIVO_TRABAJOS.unlink(missing_ok=True)
+                borrar_archivo(ARCHIVO_TRABAJOS)
         elif quitados:
             guardar_trabajos()
+    if ocupados:
+        print(f"queue clear: no se borraron los trabajos {', '.join(f'[{i}]' for i in ocupados)}: "
+              "otro programa tiene abierta su salida")
     if quitados or borrados or json_borrado:
         BITACORA.record(ev.OUTPUT_FILES_CLEARED, trabajos=quitados, archivos=sorted(borrados))
         print("queue clear: se borraron los trabajos terminados de la cola y sus salidas")
-    else:
+    elif not ocupados:
         print("queue clear: no hay trabajos terminados en la cola")
 
 
@@ -737,8 +776,8 @@ def limpiar_salidas_huerfanas():
     ARCHIVO_TRABAJOS.with_suffix(".tmp").unlink(missing_ok=True)  # guardado interrumpido
     borrados = []
     for ruta in salidas_huerfanas():
-        ruta.unlink(missing_ok=True)
-        borrados.append(ruta.name)
+        if borrar_archivo(ruta):
+            borrados.append(ruta.name)
     if borrados:
         BITACORA.record(ev.ORPHAN_FILES_REMOVED, archivos=sorted(borrados))
 
