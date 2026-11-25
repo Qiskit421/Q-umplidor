@@ -159,6 +159,40 @@ def archivos_abiertos_linux(carpeta):
 
 ARCHIVO_TRABAJOS = Path(__file__).resolve().parent.parent / "data" / "trabajos.json"
 CARPETA_SALIDAS = ARCHIVO_TRABAJOS.parent / "salidas"
+
+
+def bloquear_instancia():
+    """Impide abrir dos Q-umplidor sobre la misma carpeta data.
+
+    Si hubiera dos, cada uno marcaría como interrumpidos los trabajos que el
+    otro sigue ejecutando. El candado se libera solo al cerrar el programa.
+    """
+    ARCHIVO_TRABAJOS.parent.mkdir(parents=True, exist_ok=True)
+    candado = open(ARCHIVO_TRABAJOS.parent / "q-umplidor.lock", "a+")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            candado.seek(0)
+            msvcrt.locking(candado.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(candado, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        candado.close()
+        raise SystemExit("Q-umplidor ya está abierto en otra terminal. Ciérralo antes de abrirlo de nuevo.")
+    return candado
+
+
+def borrar_archivo(ruta):
+    """Borra un archivo; si otro proceso lo tiene abierto (Windows), devuelve False en vez de fallar."""
+    try:
+        ruta.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
+CANDADO = bloquear_instancia()
 BITACORA = ev.EventLog(ARCHIVO_TRABAJOS.parent / "events.jsonl")
 politica = escalamiento.leer_politica()  # RF-30: gracia entre SIGTERM y SIGKILL, tiempo máximo
 
@@ -525,7 +559,7 @@ def limpiar_cola_terminados():
     Los trabajos de afuera (Avance 01) no se tocan. La bitácora se conserva.
     """
     global siguiente_id_cola
-    quitados, borrados = [], []
+    quitados, borrados, ocupados = [], [], []
     with bloqueo_trabajos:
         for id_trabajo, trabajo in list(trabajos_cola.items()):
             estado_trabajo(trabajo)  # refresca si acaba de terminar
@@ -535,28 +569,33 @@ def limpiar_cola_terminados():
             if grupo is not None:
                 grupo.terminar()
                 grupo.cerrar()
-            for ruta in rutas_salida(id_trabajo, de_cola=True):
-                if ruta.exists():
-                    ruta.unlink(missing_ok=True)
-                    borrados.append(ruta.name)
+            rutas = [ruta for ruta in rutas_salida(id_trabajo, de_cola=True) if ruta.exists()]
+            if not all(borrar_archivo(ruta) for ruta in rutas):
+                # Algún proceso todavía tiene abierta su salida: el trabajo se conserva.
+                ocupados.append(id_trabajo)
+                continue
+            borrados += [ruta.name for ruta in rutas]
             del trabajos_cola[id_trabajo]
             quitados.append(id_trabajo)
         # Salidas que ya no pertenecen a ningún trabajo (por ejemplo, de una versión anterior).
         for ruta in salidas_huerfanas():
-            ruta.unlink(missing_ok=True)
-            borrados.append(ruta.name)
+            if borrar_archivo(ruta):
+                borrados.append(ruta.name)
         json_borrado = False
         if not trabajos_cola:
             json_borrado = ARCHIVO_TRABAJOS.exists()
             siguiente_id_cola = 1
             with bloqueo_guardado:
-                ARCHIVO_TRABAJOS.unlink(missing_ok=True)
+                borrar_archivo(ARCHIVO_TRABAJOS)
         elif quitados:
             guardar_trabajos()
+    if ocupados:
+        print(f"queue clear: no se borraron los trabajos {', '.join(f'[{i}]' for i in ocupados)}: "
+              "otro programa tiene abierta su salida")
     if quitados or borrados or json_borrado:
         BITACORA.record(ev.OUTPUT_FILES_CLEARED, trabajos=quitados, archivos=sorted(borrados))
         print("queue clear: se borraron los trabajos terminados de la cola y sus salidas")
-    else:
+    elif not ocupados:
         print("queue clear: no hay trabajos terminados en la cola")
 
 
@@ -737,8 +776,8 @@ def limpiar_salidas_huerfanas():
     ARCHIVO_TRABAJOS.with_suffix(".tmp").unlink(missing_ok=True)  # guardado interrumpido
     borrados = []
     for ruta in salidas_huerfanas():
-        ruta.unlink(missing_ok=True)
-        borrados.append(ruta.name)
+        if borrar_archivo(ruta):
+            borrados.append(ruta.name)
     if borrados:
         BITACORA.record(ev.ORPHAN_FILES_REMOVED, archivos=sorted(borrados))
 
@@ -1121,17 +1160,17 @@ if os.name == "posix":
     signal.signal(signal.SIGTERM, cerrar_por_senal)
     signal.signal(signal.SIGHUP, cerrar_por_senal)
 
-while True:
-    try:
-        entrada = input("Q-umplidor> ").strip()
-    except (KeyboardInterrupt, EOFError):
-        print()
-        break
+# Un comando a la vez: la terminal del servidor y los clientes de la red
+# (Network Edition) comparten la misma cola.
+bloqueo_comandos = threading.Lock()
 
+
+def atender(entrada):
+    """Atiende un comando, venga del teclado o de un cliente de la red."""
     partes = entrada.split()
 
     if len(partes) == 0:
-        continue
+        return
 
     # "queue cancelar <id>" cancela trabajos de la cola; "cancelar <id>" solo los
     # de fuera de ella. Sin esto, queue lo formaría como un comando de bash
@@ -1144,7 +1183,7 @@ while True:
     if partes[0] == "help":
         if len(partes) != 1:
             print("help: no acepta argumentos. Uso: help")
-            continue
+            return
         print("Comandos disponibles:")
         print("  sleep <segundos>    Ejecutar una espera en primer plano.")
         print("  sleep <segundos> &  Ejecutar un trabajo en segundo plano.")
@@ -1174,51 +1213,51 @@ while True:
     elif partes[0] == "politica":
         if len(partes) != 1:
             print("politica: no acepta argumentos. Uso: politica")
-            continue
+            return
         escalamiento.mostrar_politica(politica)
 
     elif partes[0] == "queue":
         if len(partes) == 1:
             mostrar_cola()
-            continue
+            return
         # Sin esto, "queue clear" se encolaría como el comando de bash "clear".
         if len(partes) == 2 and partes[1] == "clear":
             limpiar_cola_terminados()
-            continue
+            return
 
         comando_cola = entrada.partition(" ")[2].strip()
         if not comando_cola:
             print("queue: debes indicar un comando después de queue")
-            continue
+            return
         # Elimina un & final opcional para que cada trabajo termine antes de
         # iniciar el siguiente y la cola conserve su ejecución secuencial.
         if comando_cola.endswith("&"):
             comando_cola = comando_cola[:-1].rstrip()
         if not comando_cola:
             print("queue: debes indicar un comando después de queue")
-            continue
+            return
         try:
             shlex.split(comando_cola)
         except ValueError:
             print("queue: comillas sin cerrar")
-            continue
+            return
         registrar_en_cola(comando_cola, comando_cola)
 
     elif partes[0] == "sleep":
         if len(partes) == 1 or partes == ["sleep", "&"]:
             print("sleep: faltan los segundos. Uso: sleep <segundos> o sleep <segundos> &")
-            continue
+            return
 
         if len(partes) not in (2, 3) or (len(partes) == 3 and partes[2] != "&"):
             print("sleep: argumentos incorrectos. Uso: sleep <segundos> o sleep <segundos> &")
-            continue
+            return
         try:
             segundos = int(partes[1])
             if segundos < 0:
                 raise ValueError
         except ValueError:
             print("sleep: los segundos deben ser un entero no negativo")
-            continue
+            return
 
         # Caso: sleep 10
         if len(partes) == 2:
@@ -1245,17 +1284,17 @@ while True:
             argumentos = shlex.split(entrada)[1:]
         except ValueError:
             print("ejecutar: comillas sin cerrar")
-            continue
+            return
         if not argumentos or argumentos[-1] != "&" or len(argumentos) == 1:
             print("ejecutar: uso: ejecutar <programa> [argumentos] &")
-            continue
+            return
         try:
             proceso = lanzar_trabajo(siguiente_id, argumentos[:-1])
             registrar_trabajo(proceso, entrada)
         except OSError as error:
             BITACORA.record(ev.JOB_REJECTED, comando=argumentos[0], motivo=error.strerror)
             print(f"ejecutar: no se pudo iniciar '{argumentos[0]}': {error.strerror}")
-            continue
+            return
 
     # Mostrar stdout o stderr de un trabajo
     elif partes[0] in ("salida", "errores"):
@@ -1278,7 +1317,7 @@ while True:
     elif partes[0] == "listar":
         if len(partes) != 1:
             print("listar: no acepta argumentos. Uso: listar")
-            continue
+            return
         # La cola tiene su propio listado (queue); aquí solo van los de fuera.
         if not trabajos:
             print("No hay trabajos registrados")
@@ -1384,14 +1423,14 @@ while True:
     elif partes[0] == "eventos":
         if len(partes) > 2:
             print("eventos: argumentos incorrectos. Uso: eventos [id]")
-            continue
+            return
         filtro = None
         if len(partes) == 2:
             try:
                 filtro = int(partes[1])
             except ValueError:
                 print("eventos: el ID debe ser un número")
-                continue
+                return
         registros = BITACORA.read(job_id=filtro, last=None if filtro else 20)
         if not registros:
             print("No hay eventos registrados")
@@ -1403,10 +1442,29 @@ while True:
     elif partes[0] == "recursos":
         if len(partes) != 1:
             print("recursos: no acepta argumentos. Uso: recursos")
-            continue
+            return
         mostrar_recursos()
 
     # Manejar comandos inválidos sin terminar el servicio
     else:
         print(f"{partes[0]}: comando no reconocido")
 
+
+def repl():
+    """La terminal de siempre: lee comandos del teclado y los atiende."""
+    while True:
+        try:
+            entrada = input("Q-umplidor> ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            break
+        partes = entrada.split()
+        if len(partes) == 2 and partes[0] == "sleep":
+            atender(entrada)  # sleep en primer plano: no detiene a los clientes de la red
+            continue
+        with bloqueo_comandos:
+            atender(entrada)
+
+
+if __name__ == "__main__":
+    repl()
