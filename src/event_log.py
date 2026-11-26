@@ -12,6 +12,7 @@ JOB_FINISHED = "JOB_FINISHED"                  # terminó por sí solo (exit_cod
 JOB_CANCEL_REQUESTED = "JOB_CANCEL_REQUESTED"  # el usuario pidió cancelar
 JOB_CANCELLED = "JOB_CANCELLED"                # cancelación efectiva
 JOB_REJECTED = "JOB_REJECTED"                  # comando inválido o sin recursos
+ACCESS_DENIED = "ACCESS_DENIED"                # conexión rechazada por IP o clave
 JOB_INTERRUPTED = "JOB_INTERRUPTED"            # el sistema se cerró con el trabajo corriendo
 ORPHAN_FILES_REMOVED = "ORPHAN_FILES_REMOVED"  # .out/.err sin trabajo borrados al arrancar
 OUTPUT_FILES_CLEARED = "OUTPUT_FILES_CLEARED"  # queue clear quitó los trabajos terminados de la cola y sus salidas
