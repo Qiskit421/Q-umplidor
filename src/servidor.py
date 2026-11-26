@@ -204,7 +204,7 @@ def iniciar():
         servidor.listen()
     except OSError as error:
         raise SystemExit(f"No se pudo abrir {INTERFAZ}:{PUERTO} para la red: {error.strerror}")
-
+    main.INFO_RED = f"escuchando en {INTERFAZ}:{PUERTO} (máximo {MAX_CLIENTES} clientes)"
     sys.stdout = SalidaPorHilo(sys.stdout)
     threading.Thread(target=escuchar_clientes, args=(servidor,), daemon=True).start()
     threading.Thread(target=responder_busquedas, daemon=True).start()

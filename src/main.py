@@ -11,6 +11,7 @@ import atexit
 from collections import deque
 import event_log as ev
 import validacion
+import salud
 # Parte de Ruy (Avance 02): RF-05, RF-06 y RF-30
 import concurrencia
 import escalamiento
@@ -783,6 +784,8 @@ def limpiar_salidas_huerfanas():
 
 
 limpiar_salidas_huerfanas()
+INICIO_SERVICIO = time.time()  # RF-24: desde cuándo está activo el servicio
+INFO_RED = None                # lo completa servidor.py cuando abre el puerto
 BITACORA.record(ev.SYSTEM_STARTED, trabajos_previos=len(trabajos) + len(trabajos_cola))
 atexit.register(lambda: BITACORA.record(ev.SYSTEM_STOPPED))
 
@@ -981,6 +984,36 @@ def mostrar_recursos():
     print(f"Archivos abiertos ........... {len(abiertos)}{detalle_archivos(abiertos)}")
     print(f"Archivos de salida huérfanos  {len(sin_trabajo)}{detalle_archivos(sin_trabajo)}")
 
+def en_segundo_plano():
+    """Trabajos de afuera (sleep N &, ejecutar) que siguen vivos."""
+    return sum(
+        1 for trabajo in list(trabajos.values())
+        if trabajo.get("proceso") is not None and trabajo["proceso"].poll() is None
+    )
+
+
+def limite_actual():
+    """Límite de concurrencia vigente (el que cambia el comando 'limite <N>')."""
+    return control_concurrencia.limite  # confirma el nombre en el paso 4
+
+
+def mostrar_salud():
+    """RF-24: servicio activo, trabajos en ejecución y en cola, y errores recientes."""
+    with condicion_cola:
+        en_cola = len(cola_ids)
+    for linea in salud.construir_resumen(
+        inicio=INICIO_SERVICIO,
+        ahora=time.time(),
+        en_ejecucion=contar_activos(),
+        limite=limite_actual(),
+        en_cola=en_cola,
+        capacidad=CAPACIDAD_COLA,
+        en_segundo_plano=en_segundo_plano(),
+        registros=BITACORA.read(),
+        red=INFO_RED,
+        directorio_datos=str(ARCHIVO_TRABAJOS.parent),
+    ):
+        print(linea)
 
 def obtener_id(partes, comando, de_cola):
     """Valida que el comando traiga un ID válido y que exista. Devuelve el ID o None.
@@ -1214,6 +1247,7 @@ def atender(entrada):
         print("  politica            Ver la política de escalamiento (SIGTERM -> SIGKILL).")
         print("  eventos [id]        Consultar la bitácora de eventos.")
         print("  recursos            Revisar procesos y archivos que siguen en uso.")
+        print("  salud               Ver el resumen de salud del servicio.")
         print("  help                Mostrar esta ayuda.")
 
     elif partes[0] == "limite":
@@ -1453,6 +1487,13 @@ def atender(entrada):
             print("recursos: no acepta argumentos. Uso: recursos")
             return
         mostrar_recursos()
+
+    # Resumen de salud del servicio (RF-24)
+    elif partes[0] == "salud":
+        if len(partes) != 1:
+            print("salud: no acepta argumentos. Uso: salud")
+            return
+        mostrar_salud()
 
     # Manejar comandos inválidos sin terminar el servicio
     else:
