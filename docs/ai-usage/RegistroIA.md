@@ -30,5 +30,7 @@ La columna **Decisión** marca cuál de los tres fue cada uso.
 | IA-014 | 01/11/2026 | Ruy Valle | Claude AI | `src/recuperacion.py`, `verif/scripts/prueba_avance02_ruy.py`, `docs/incidents/INC-002.md` | Recuperar huérfanos tras `kill -9`, script de verificación TC-020..027 e incidente INC-002 | Modificado |
 | IA-015 | 06/11/2026 | Misael | Claude AI | `src/main.py` | Como ajustar el comando para que `queue` muestra la cola con referencias | Modificado |
 | IA-016 | 06/11/2026 | Misael | Claude AI | `src/main.py` | Revision para que `queue` y sus comandos (`queue`, `queue clear`, y sus comandos siguientes ) | Modificado |
+| IA-017 | 25/11/2026 | Oscar | Claude AI | `src/protocolo.py`, `src/servidor.py`, `src/cliente.py`, `verif/scripts/prueba_red.py`, guía técnica (sección 10), casos de prueba, matriz | Manejo de mensajes fragmentados y de desconexiones en la red (RF-21, RF-22, RF-28) | Modificado |
+| IA-018 | 25/11/2026 | Oscar | Claude AI | `docs/technical-guide/Arquitectura.md`, `Construccion.md`, `construir.sh`, `verif/test-cases/test_protocolo.py`, `README.md` | Guía técnica final y mecanismo de construcción reproducible | Modificado |
 
 > Para agregar una entrada: añade la fila aquí y su sección en `detalle-uso-ia.md` con el mismo ID.
