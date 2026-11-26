@@ -1,6 +1,6 @@
 # Guía técnica — Arquitectura de Q-umplidor
 
-> **Estado:** Avance 02. Describe lo que hay en `src/main.py` en la rama `main`. Lo que todavía no está integrado aparece en la sección 8 como pendiente. Si algo de aquí no coincide con el código, manda el código y hay que corregir este documento.
+> **Estado:** Avance 02, más la sección 10 (red) del Avance 03. Describe lo que hay en `src/main.py` en la rama `main`; la red está en `src/servidor.py`, `src/cliente.py` y `src/protocolo.py`. Lo que todavía no está integrado aparece en la sección 8 como pendiente. Si algo de aquí no coincide con el código, manda el código y hay que corregir este documento.
 
 Responsable: Oscar Aguilera
 
@@ -116,3 +116,69 @@ La cola hoy abre sus propios archivos de salida en `ejecutar_de_cola()` en lugar
 | [ADR-0001](../decisions/ADR-0001.md) | Python 3 con biblioteca estándar |
 | [ADR-0002](../decisions/ADR-0002.md) | Concurrencia: un proceso por trabajo, cola con pool de hilos |
 | [ADR-0003](../decisions/ADR-0003.md) | Persistencia |
+
+## 10. Red: servidor, cliente y protocolo
+
+Responsables: Diego (servidor y cliente remoto, PR #157), Oscar (mensajes fragmentados y desconexiones).
+
+```mermaid
+flowchart LR
+    C["cliente.py<br/>(otra terminal u otra máquina)"] -- "UDP 5001: Q-UMPLIDOR?" --> D["responder_busquedas()"]
+    C -- "TCP 5000: mensajes JSON + \n" --> A["atender_cliente()<br/>un hilo por cliente"]
+    A -->|LectorMensajes| P["protocolo.py"]
+    A -->|"ejecutar_remoto(comando)<br/>bajo bloqueo_comandos"| M["main.atender()"]
+    A -->|CLIENT_CONNECTED / CLIENT_DISCONNECTED<br/>RESPONSE_NOT_DELIVERED| B["data/events.jsonl"]
+```
+
+| Archivo | Qué hace |
+|---|---|
+| `src/servidor.py` | Arranca la consola de `main.py` y además escucha en TCP 5000. Genera una clave de 6 dígitos al iniciar (3 intentos por conexión). Atiende a cada cliente en su propio hilo y ejecuta sus comandos con `main.atender()`, capturando lo que imprime (`SalidaPorHilo`). Responde búsquedas por UDP 5001. |
+| `src/cliente.py` | `python3 src/cliente.py [ip]`. Sin IP busca el servidor en la red local por UDP. Pide la clave y luego funciona como la consola, pero remota. |
+| `src/protocolo.py` | Formato de los mensajes y cómo se leen y envían. Lo usan los dos lados. |
+
+### 10.1 Formato de los mensajes (RF-21)
+
+Cada mensaje es **un objeto JSON en UTF-8 terminado en `\n`**, de 64 KiB como máximo (`MAX_MENSAJE`).
+
+| Sentido | Mensaje |
+|---|---|
+| cliente → servidor | `{"clave": "123456"}` y después `{"comando": "queue sleep 5"}` |
+| servidor → cliente | `{"ok": true, ...}` / `{"ok": false, "mensaje": "clave incorrecta"}` |
+| servidor → cliente | `{"salida": "ID: [1] agregado a la cola\n"}` |
+| servidor → cliente | `{"error": "motivo", "cerrar": true}`: aviso justo antes de que el servidor cierre la conexión |
+
+**Mensajes fragmentados.** TCP entrega un flujo de bytes, no mensajes. Un `recv()` puede traer medio mensaje, un mensaje y el principio del siguiente, o varios mensajes. `LectorMensajes` guarda los bytes en `pendiente`. Cada `leer()` busca el primer `\n`: si está, corta ahí, decodifica ese mensaje y deja el resto para la siguiente llamada; si no está, vuelve a llamar a `recv()`. Para enviar se usa `sendall()`, que repite el envío hasta mandar todos los bytes aunque el sistema operativo acepte solo una parte en cada llamada.
+
+**Por qué no `makefile().readline()`.** La versión anterior usaba un archivo de texto sobre el socket: un byte que no fuera UTF-8 lanzaba `UnicodeDecodeError` fuera del `try` y mataba el hilo con `Traceback`, y una línea sin `\n` crecía en memoria sin límite. `LectorMensajes` trabaja con bytes, decodifica cada mensaje ya completo y corta si pasa de 64 KiB.
+
+| Error en un mensaje | Qué hace el servidor |
+|---|---|
+| No es UTF-8, no es JSON o no es un objeto (`MensajeInvalido`) | Responde `error: petición no válida (...)` y la conexión sigue |
+| No trae `"comando"` | Responde un error y la conexión sigue |
+| Más de 64 KiB sin `\n` (`MensajeDemasiadoGrande`) | Manda `{"error": ..., "cerrar": true}` y cierra solo esa conexión |
+
+### 10.2 Desconexiones (RF-22, RF-28)
+
+Ninguna falla de un cliente tumba el servidor ni a los demás clientes: cada uno tiene su hilo y `atender_cliente()` atrapa todo lo que pueda pasar en su conexión.
+
+| Situación | Cómo se detecta | Qué pasa |
+|---|---|---|
+| El cliente escribe `salir` o cierra el programa | `recv()` devuelve 0 bytes → `ConexionCerrada` | Se cierra el socket y se registra `CLIENT_DISCONNECTED` |
+| El cliente se va a mitad de un mensaje | `ConexionCerrada` con `incompletos > 0` | El pedazo se descarta (nunca llegó completo, no se ejecuta) y el motivo dice cuántos bytes |
+| El cliente se va a mitad de un comando | El comando ya se está ejecutando; falla el envío de la respuesta | El trabajo sigue y queda registrado; se registra `RESPONSE_NOT_DELIVERED` con el comando |
+| El cliente no manda nada durante `Q_INACTIVIDAD` segundos | `settimeout()` del socket → `TimeoutError` | Aviso `desconectado por inactividad` y cierre. Por defecto 300 s; un valor que no sea entero ≥ 1 detiene el arranque |
+| La red se cae sin cerrar la conexión (cable, Wi-Fi) | `SO_KEEPALIVE` y el mismo timeout | El sistema operativo o el timeout terminan la conexión y se libera el hilo |
+| Error de red (`ConnectionResetError`, `BrokenPipeError`) | `OSError` | Se cierra y se registra con el motivo |
+| Se cierra el servidor con clientes conectados | El cliente recibe 0 bytes o `OSError` | El cliente avisa "Se perdió la conexión con el servidor". El servidor se puede volver a arrancar de inmediato gracias a `SO_REUSEADDR`; antes fallaba con `Address already in use` cerca de un minuto (`TIME_WAIT`) |
+
+Siempre se ejecuta el `finally`: se cierra el socket y, si el cliente llegó a autenticarse, se registra `CLIENT_DISCONNECTED` con `cliente` (`ip:puerto`) y `motivo`. Con `eventos` se puede ver cuándo entró y salió cada cliente y por qué.
+
+En el cliente, un mensaje con `"cerrar": true` se muestra como "El servidor cerró la conexión: <motivo>", y cualquier otra pérdida como "Se perdió la conexión con el servidor"; en los dos casos indica cómo reconectarse.
+
+### 10.3 Configuración y verificación
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `Q_INACTIVIDAD` | `300` | Segundos que una conexión puede estar callada antes de cerrarla |
+
+Pruebas: `python3 verif/scripts/prueba_red.py` (TC-028 a TC-037, ver [casos de prueba](../../verif/test-cases/casos-de-prueba.md)).
