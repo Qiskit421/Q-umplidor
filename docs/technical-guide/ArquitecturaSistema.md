@@ -1,5 +1,7 @@
 # Arquitectura del sistema: Q-umplidor (JobRunner)
 
+> **Documento histórico (Avance 02).** La guía técnica vigente, con el código final y la red, es [Arquitectura.md](Arquitectura.md). Este documento se conserva porque registra cómo se planeó la arquitectura antes de implementar la red (sección 4).
+
 > **Versión:** Avance 02. **Responsable:** Ruy.
 > **Alcance:** describe la arquitectura **actual**, que es `main` más la rama `Ruy` (RF-05, RF-06, RF-30), y la arquitectura **objetivo** del producto final.
 > Este documento es independiente de [Arquitectura.md](Arquitectura.md). Si algo de aquí no coincide con el código, manda el código.
