@@ -1164,6 +1164,23 @@ if os.name == "posix":
 # (Network Edition) comparten la misma cola.
 bloqueo_comandos = threading.Lock()
 
+LONGITUD_MAXIMA = 1024
+
+
+def solicitud_valida(entrada, origen):
+    """Rechaza solicitudes vacías, demasiado largas o con caracteres de control (RF-02, RNF-14)."""
+    if not entrada.strip():
+        error = "solicitud vacía. Escribe un comando; usa help para ver la lista."
+    elif len(entrada) > LONGITUD_MAXIMA:
+        error = f"solicitud demasiado larga (máximo {LONGITUD_MAXIMA} caracteres)."
+    elif any(ord(c) < 32 and c != "\t" for c in entrada):
+        error = "la solicitud contiene caracteres de control no permitidos."
+    else:
+        return True
+    # Solo un recorte del texto en la bitácora (RNF-15).
+    BITACORA.record(ev.JOB_REJECTED, comando=entrada[:80], motivo=error, origen=origen)
+    print(f"rechazado: {error}")
+    return False
 
 def atender(entrada):
     """Atiende un comando, venga del teclado o de un cliente de la red."""
@@ -1461,6 +1478,8 @@ def repl():
         partes = entrada.split()
         if len(partes) == 2 and partes[0] == "sleep":
             atender(entrada)  # sleep en primer plano: no detiene a los clientes de la red
+            continue
+        if entrada and not solicitud_valida(entrada, origen="local"):
             continue
         with bloqueo_comandos:
             atender(entrada)
