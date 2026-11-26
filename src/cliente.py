@@ -10,6 +10,8 @@ import json
 import socket
 import sys
 
+import protocolo
+
 PUERTO = 5000
 PUERTO_DESCUBRIMIENTO = 5001
 MENSAJE_BUSQUEDA = b"Q-UMPLIDOR?"
@@ -46,15 +48,19 @@ def buscar_servidor():
             return None
 
 
-def enviar(conexion, datos):
-    conexion.sendall((json.dumps(datos, ensure_ascii=False) + "\n").encode("utf-8"))
+enviar = protocolo.enviar_mensaje
+
+
+class ServidorCerro(Exception):
+    """El servidor avisó que cierra la conexión (por ejemplo, por inactividad)."""
 
 
 def recibir(lector):
-    linea = lector.readline()
-    if not linea:
-        raise ConnectionError("el servidor cerró la conexión")
-    return json.loads(linea)
+    """Lee la siguiente respuesta completa, aunque llegue en varios pedazos."""
+    respuesta = lector.leer()
+    if respuesta.get("cerrar"):
+        raise ServidorCerro(respuesta.get("error", "el servidor cerró la conexión"))
+    return respuesta
 
 
 def main():
@@ -79,7 +85,8 @@ def main():
         return 1
     conexion.settimeout(None)
 
-    with conexion, conexion.makefile("r", encoding="utf-8") as lector:
+    lector = protocolo.LectorMensajes(conexion)
+    with conexion:
         try:
             for intento in range(3):  # el servidor cierra la conexión al tercer intento fallido
                 clave = input(f"Clave de acceso de {nombre}: ").strip()
@@ -105,8 +112,13 @@ def main():
                 print(recibir(lector).get("salida", ""), end="")
         except (KeyboardInterrupt, EOFError):
             print()
-        except (ConnectionError, OSError, ValueError):
+        except ServidorCerro as aviso:
+            print(f"El servidor cerró la conexión: {aviso}")
+            print("Vuelve a ejecutar python cliente.py para reconectarte.")
+            return 1
+        except (protocolo.ConexionCerrada, protocolo.MensajeInvalido, protocolo.MensajeDemasiadoGrande, OSError):
             print("Se perdió la conexión con el servidor.")
+            print("Vuelve a ejecutar python cliente.py para reconectarte.")
             return 1
     return 0
 
