@@ -168,9 +168,9 @@ def iniciar_vigilante(politica, trabajos_en_ejecucion, al_detener, debe_parar):
 
 def mostrar_politica(politica):
     print("Política de escalamiento:")
-    print(f"  1. SIGTERM al grupo de procesos del trabajo")
+    print("  1. SIGTERM al grupo de procesos del trabajo")
     print(f"  2. Gracia: {politica.gracia:g}s ({VARIABLE_GRACIA})")
-    print(f"  3. SIGKILL si sigue vivo, y wait() para no dejar zombis")
+    print("  3. SIGKILL si sigue vivo, y wait() para no dejar zombis")
     if politica.tiempo_maximo > 0:
         print(f"  Tiempo máximo por trabajo: {politica.tiempo_maximo:g}s ({VARIABLE_TIEMPO_MAXIMO}); "
               f"al superarlo se detiene y queda FAILED")

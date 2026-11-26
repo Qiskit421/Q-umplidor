@@ -17,11 +17,25 @@ Desarrollaremos **Q-umplidor**, que funcionará como un gestor de trabajos para 
 | Ruy Eleazar Valle Rojas | Verificación | ruy.valle6299@alumnos.udg.mx |
 | Oscar Omar Aguilera De La Torre | Revisor de producto | oscar.aguilera7936@alumnos.udg.mx |
 
-## 🏗️ Construcción provisional
+## 🏗️ Construcción, ejecución y prueba
 
-### Tecnologías y entorno
-- **Python 3:** lenguaje propuesto para el desarrollo.
-- **Linux:** sistema operativo.
+- **Lenguaje:** Python 3.10 o más nuevo, solo biblioteca estándar (sin `pip install`).
+- **Sistema:** Linux o WSL 2 (Ubuntu).
+
+```bash
+git clone https://github.com/Qiskit421/Q-umplidor.git
+cd Q-umplidor
+./construir.sh               # revisa Python, dependencias, compilación, análisis y pruebas unitarias
+./construir.sh --completo    # además, pruebas del Avance 01 y de red (con Q-umplidor cerrado)
+```
+
+| Para | Comando |
+|---|---|
+| Consola local | `python3 src/main.py` |
+| Servidor de red | `python3 src/servidor.py` (muestra la IP y la clave) |
+| Cliente remoto | `python3 src/cliente.py` o `python3 src/cliente.py <ip>` |
+
+Detalle de cada paso, variables de configuración y problemas comunes: [Construccion.md](docs/technical-guide/Construccion.md). Arquitectura, protocolo, persistencia y señales: [guía técnica](docs/technical-guide/Arquitectura.md). Uso: [guía de usuario](docs/user-guide/guia-de-usuario.md).
 
 ### 📁 Estructura del proyecto
 
@@ -48,29 +62,19 @@ Q-umplidor/
 ```
 
 
-### 💻 Preparación y ejecución
+### ⌨️ Comandos principales
 
-Clonar el repositorio y entrar a su carpeta:
+Lista completa con `help` dentro de la consola.
 
-```bash
-git clone https://github.com/Maliboo127/Q-umplidor.git
-cd Q-Cumplidor
-```
-
-Ejecutar el programa:
-
-```bash
-python3 src/main.py
-```
-
-### ⌨️ Comandos disponibles
 | Comando | Qué hace |
 |---|---|
-| `sleep N &` | Envía un trabajo en segundo plano y devuelve su ID |
-| `estado <id>` | Informa si el trabajo está en ejecución o terminó |
-| `listar` | Muestra los trabajos enviados |
-| `codigo <id>` | Informa el código de salida de un trabajo terminado |
-
+| `queue <comando>` | Envía un trabajo a la cola y devuelve su ID |
+| `queue` | Muestra la cola: estado, salida, código y tiempo de cada trabajo |
+| `queue cancelar <id>` | Cancela un trabajo de la cola (SIGTERM → SIGKILL) |
+| `salida <id>` / `errores <id>` | Muestra la salida estándar o de error de un trabajo de la cola |
+| `limite [N]` | Consulta o cambia cuántos trabajos corren a la vez |
+| `eventos [id]` | Consulta la bitácora |
+| `sleep N &`, `estado <id>`, `listar`, `codigo <id>`, `cancelar <id>` | Trabajos del Avance 01 |
 
 ## Arquitectura inicial (preliminar)
 
@@ -89,10 +93,10 @@ flowchart TD
 
 *Las líneas discontinuas indican componentes pendientes.*
 
-Detalle completo en la [guía de arquitectura](docs/technical-guide/arquitectura.md). Decisiones relacionadas:
-[ADR-0001](docs/decisions/0001-lenguaje-runtime.md) (lenguaje),
-[ADR-0002](docs/decisions/0002-modelo-concurrencia.md) (concurrencia) y
-[ADR-0003](docs/decisions/0003-persistencia.md) (persistencia, abierta).
+Detalle completo en la [guía técnica](docs/technical-guide/Arquitectura.md). Decisiones relacionadas:
+[ADR-0001](docs/decisions/ADR-0001.md) (lenguaje),
+[ADR-0002](docs/decisions/ADR-0002.md) (concurrencia) y
+[ADR-0003](docs/decisions/ADR-0003.md) (persistencia); las posteriores están en [docs/decisions](docs/decisions/).
 
 ## Modelo preliminar de estados
 
