@@ -1,0 +1,6 @@
+Fecha: 2026-11-25 21:06:47
+Python: 3.14.4
+Sistema: Linux 6.18.58.1-microsoft-standard-WSL2 x86_64
+Commit: a262ca3
+Comando: python3 verif/scripts/prueba_red.py
+Q_INACTIVIDAD=3
