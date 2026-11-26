@@ -10,7 +10,7 @@ import threading
 import atexit
 from collections import deque
 import event_log as ev
-
+import validacion
 # Parte de Ruy (Avance 02): RF-05, RF-06 y RF-30
 import concurrencia
 import escalamiento
@@ -1164,18 +1164,10 @@ if os.name == "posix":
 # (Network Edition) comparten la misma cola.
 bloqueo_comandos = threading.Lock()
 
-LONGITUD_MAXIMA = 1024
-
-
 def solicitud_valida(entrada, origen):
     """Rechaza solicitudes vacías, demasiado largas o con caracteres de control (RF-02, RNF-14)."""
-    if not entrada.strip():
-        error = "solicitud vacía. Escribe un comando; usa help para ver la lista."
-    elif len(entrada) > LONGITUD_MAXIMA:
-        error = f"solicitud demasiado larga (máximo {LONGITUD_MAXIMA} caracteres)."
-    elif any(ord(c) < 32 and c != "\t" for c in entrada):
-        error = "la solicitud contiene caracteres de control no permitidos."
-    else:
+    error = validacion.validar_solicitud(entrada)
+    if error is None:
         return True
     # Solo un recorte del texto en la bitácora (RNF-15).
     BITACORA.record(ev.JOB_REJECTED, comando=entrada[:80], motivo=error, origen=origen)
