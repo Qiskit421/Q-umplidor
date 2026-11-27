@@ -6,6 +6,7 @@ from pathlib import Path
 # Tipos de evento
 SYSTEM_STARTED = "SYSTEM_STARTED"
 SYSTEM_STOPPED = "SYSTEM_STOPPED"
+SYSTEM_STOPPING = "SYSTEM_STOPPING"            # el servicio empezó a cerrarse: ya no acepta trabajos nuevos
 JOB_SUBMITTED = "JOB_SUBMITTED"                # trabajo aceptado -> QUEUED
 JOB_STARTED = "JOB_STARTED"                    # un worker lo lanza -> RUNNING
 JOB_FINISHED = "JOB_FINISHED"                  # terminó por sí solo (exit_code)

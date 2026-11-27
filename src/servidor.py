@@ -21,6 +21,7 @@ import control_acceso
 import event_log as ev
 import main  # arranca Q-umplidor: carga la cola, el candado de una sola instancia, etc.
 import protocolo
+import atexit
 
 
 def _leer_puerto():
@@ -45,6 +46,10 @@ TIEMPO_AUTENTICACION = 30      # segundos para escribir la clave; quien no lo ha
 POLITICA = control_acceso.AccessPolicy(control_acceso.leer_redes_permitidas())
 clientes_activos = threading.BoundedSemaphore(MAX_CLIENTES)
 
+cierre_red = threading.Event()   # RF-15: el servidor de red se está cerrando
+conexiones = set()               # conexiones abiertas, para cerrarlas al apagar
+bloqueo_conexiones = threading.Lock()
+socket_escucha = None
 
 def leer_inactividad():
     """Segundos que una conexión puede estar callada antes de cerrarla (RF-22).
@@ -222,14 +227,23 @@ def atender_cliente(conexion, direccion):
         try:
             conexion.close()
         finally:
+            with bloqueo_conexiones:
+                conexiones.discard(conexion)
             clientes_activos.release()  # se libera el lugar tomado en escuchar_clientes
+        if cierre_red.is_set():
+            motivo = "el servicio se cerró"
         if autenticado:
             main.BITACORA.record(CLIENT_DISCONNECTED, cliente=cliente, motivo=motivo)
 
-
 def escuchar_clientes(servidor):
-    while True:
-        conexion, direccion = servidor.accept()
+    while not cierre_red.is_set():
+        try:
+            conexion, direccion = servidor.accept()
+        except OSError:
+            break  # el socket de escucha se cerró: el servicio se está apagando
+        if cierre_red.is_set():
+            conexion.close()
+            break
         ip = direccion[0]
         if not POLITICA.is_allowed(ip):  # RF-20: antes de leer nada
             rechazar(conexion, ip, "IP_NO_PERMITIDA",
@@ -239,6 +253,8 @@ def escuchar_clientes(servidor):
             rechazar(conexion, ip, "MAX_CLIENTES",
                      "servidor ocupado: demasiados clientes conectados. Intente más tarde.")
             continue
+        with bloqueo_conexiones:
+            conexiones.add(conexion)
         threading.Thread(target=atender_cliente, args=(conexion, direccion), daemon=True).start()
 
 
@@ -249,15 +265,45 @@ def responder_busquedas():
             udp.bind(("", PUERTO_DESCUBRIMIENTO))
         except OSError:
             return  # sin búsqueda automática: los clientes pueden usar la IP
-        while True:
+        udp.settimeout(0.5)  # para revisar si el servidor se está cerrando
+        while not cierre_red.is_set():
             try:
                 datos, direccion = udp.recvfrom(1024)
             except OSError:
-                continue  # en Windows, una respuesta que no llegó aparece aquí como error
+                continue  # incluye el tiempo de espera agotado y el error de Windows de siempre
             if datos == MENSAJE_BUSQUEDA and POLITICA.is_allowed(direccion[0]):
                 respuesta = {"puerto": PUERTO, "nombre": socket.gethostname()}
                 udp.sendto(json.dumps(respuesta).encode("utf-8"), direccion)
 
+def cerrar_red():
+    """Cierre ordenado de la red (RF-15, RNF-25). Corre al salir, antes de liberar la cola."""
+    print("\nCerrando Q-umplidor: ya no se aceptan trabajos nuevos...")
+    try:
+        main.empezar_cierre()   # 1. desde aquí se rechazan trabajos nuevos
+    except Exception as error:  # que un fallo aquí no impida cerrar la red
+        print(f"[aviso] no se pudo registrar el inicio del cierre: {error}")
+    cierre_red.set()
+    if socket_escucha is not None:
+        try:
+            socket_escucha.shutdown(socket.SHUT_RDWR)  # despierta a accept() en Linux
+        except OSError:
+            pass  # en Windows un socket de escucha no admite shutdown; close() basta
+        socket_escucha.close()                         # 2. el puerto queda libre
+    with bloqueo_conexiones:
+        abiertas = list(conexiones)
+    for conexion in abiertas:
+        despedir(conexion, "el servicio se está cerrando")
+        try:
+            conexion.shutdown(socket.SHUT_RDWR)        # despierta al hilo que espera mensajes
+        except OSError:
+            pass
+    limite = time.time() + 3
+    while time.time() < limite:                        # espera a que cada hilo se despida
+        with bloqueo_conexiones:
+            if not conexiones:
+                break
+        time.sleep(0.05)
+    print(f"Red cerrada ({len(abiertas)} clientes desconectados). Deteniendo trabajos...")
 
 def iniciar():
     servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -270,6 +316,9 @@ def iniciar():
     except OSError as error:
         raise SystemExit(f"No se pudo abrir {INTERFAZ}:{PUERTO} para la red: {error.strerror}")
     main.INFO_RED = f"escuchando en {INTERFAZ}:{PUERTO} (máximo {MAX_CLIENTES} clientes)"
+    global socket_escucha
+    socket_escucha = servidor
+    atexit.register(cerrar_red)  # se registra después de importar main: corre ANTES que liberar_recursos
     sys.stdout = SalidaPorHilo(sys.stdout)
     threading.Thread(target=escuchar_clientes, args=(servidor,), daemon=True).start()
     threading.Thread(target=responder_busquedas, daemon=True).start()

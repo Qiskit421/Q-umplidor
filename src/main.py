@@ -12,6 +12,7 @@ from collections import deque
 import event_log as ev
 import validacion
 import salud
+import cierre
 # Parte de Ruy (Avance 02): RF-05, RF-06 y RF-30
 import concurrencia
 import escalamiento
@@ -1143,6 +1144,7 @@ def liberar_recursos():
         signal.signal(signal.SIGTERM, signal.SIG_IGN)  # que otra señal no corte la limpieza
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
     signal.signal(signal.SIGINT, signal.SIG_IGN)       # ni un Ctrl+C
+    empezar_cierre()  # RF-15: también cubre el cierre sin servidor de red (python src/main.py)
     cerrando.set()
     hilo_recolector.join(timeout=1)                    # que no compita con la limpieza
     with condicion_cola:
@@ -1197,6 +1199,26 @@ if os.name == "posix":
 # (Network Edition) comparten la misma cola.
 bloqueo_comandos = threading.Lock()
 
+def empezar_cierre():
+    """Marca el inicio del cierre (RF-15): desde aquí no se aceptan trabajos nuevos.
+
+    Se puede llamar más de una vez; solo la primera registra el evento.
+    """
+    global cola_cerrandose
+    # Espera (máximo 5 s) a que termine el comando en curso; así ningún trabajo
+    # nace a medias mientras se activa el cierre.
+    adquirido = bloqueo_comandos.acquire(timeout=5)
+    try:
+        with condicion_cola:
+            primera = not cola_cerrandose
+            cola_cerrandose = True
+            condicion_cola.notify_all()
+        if primera:
+            BITACORA.record(ev.SYSTEM_STOPPING)
+    finally:
+        if adquirido:
+            bloqueo_comandos.release()
+
 def solicitud_valida(entrada, origen):
     """Rechaza solicitudes vacías, demasiado largas o con caracteres de control (RF-02, RNF-14)."""
     error = validacion.validar_solicitud(entrada)
@@ -1222,6 +1244,12 @@ def atender(entrada):
         partes = partes[1:]
         desde_cola = True
 
+    if cola_cerrandose and cierre.es_envio_de_trabajo(partes):
+        # RF-15: durante el cierre no se aceptan trabajos nuevos.
+        BITACORA.record(ev.JOB_REJECTED, comando=entrada[:80], motivo="servicio cerrándose")
+        print("rechazado: el servicio se está cerrando y no acepta trabajos nuevos.")
+        return
+
     if partes[0] == "help":
         if len(partes) != 1:
             print("help: no acepta argumentos. Uso: help")
@@ -1245,7 +1273,8 @@ def atender(entrada):
         print("  limite              Ver el límite de concurrencia.")
         print("  limite <N>          Cambiar el límite de concurrencia.")
         print("  politica            Ver la política de escalamiento (SIGTERM -> SIGKILL).")
-        print("  eventos [id]        Consultar la bitácora de eventos.")
+        print("  eventos             Consultar la bitácora de eventos.")
+        print("  eventos <id>        Consulta solo el evento que corresponde al ID especificado.")
         print("  recursos            Revisar procesos y archivos que siguen en uso.")
         print("  salud               Ver el resumen de salud del servicio.")
         print("  help                Mostrar esta ayuda.")
