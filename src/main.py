@@ -18,6 +18,7 @@ import concurrencia
 import escalamiento
 import estados
 import recuperacion
+import configuracion
 
 if os.name == "nt":
     # Windows no tiene /proc ni grupos de procesos como Linux: se le pregunta
@@ -159,7 +160,8 @@ def archivos_abiertos_linux(carpeta):
     return abiertos
 
 
-ARCHIVO_TRABAJOS = Path(__file__).resolve().parent.parent / "data" / "trabajos.json"
+DIRECTORIO_DATOS = configuracion.leer_directorio_datos(Path(__file__).resolve().parent.parent / "data")
+ARCHIVO_TRABAJOS = DIRECTORIO_DATOS / "trabajos.json"
 CARPETA_SALIDAS = ARCHIVO_TRABAJOS.parent / "salidas"
 
 
