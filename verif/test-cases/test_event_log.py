@@ -52,6 +52,26 @@ class TestEventLog(unittest.TestCase):
         seqs = [e["seq"] for e in self.log.read()]
         self.assertEqual(sorted(seqs), list(range(1, 201)))
 
+    def test_access_denied_se_registra_con_ip_y_motivo(self): #RF-20 Y RF-23
+        self.log.record(ev.ACCESS_DENIED, ip="10.0.0.5", motivo="IP_NO_PERMITIDA")
+        eventos = self.log.read()
+        self.assertEqual(len(eventos), 1)
+        self.assertEqual(eventos[0]["event"], ev.ACCESS_DENIED)
+        texto = ev.format_entry(eventos[0])
+        self.assertIn("ip=10.0.0.5", texto)
+        self.assertIn("motivo=IP_NO_PERMITIDA", texto)
+
+    def test_access_denied_no_se_mezcla_con_eventos_de_trabajos(self):
+        self.log.record(ev.JOB_SUBMITTED, job_id=1)
+        self.log.record(ev.ACCESS_DENIED, ip="10.0.0.5", motivo="MAX_CLIENTES")
+        self.assertEqual([e["event"] for e in self.log.read(job_id=1)], [ev.JOB_SUBMITTED])
+        self.assertEqual([e["event"] for e in self.log.read()], [ev.JOB_SUBMITTED, ev.ACCESS_DENIED])
+
+    def test_access_denied_persiste_tras_reiniciar(self): #RF-14
+        self.log.record(ev.ACCESS_DENIED, ip="10.0.0.5", motivo="IP_NO_PERMITIDA")
+        again = ev.EventLog(self.path)
+        eventos = again.read()
+        self.assertEqual([e["event"] for e in eventos], [ev.ACCESS_DENIED])
 
 if __name__ == "__main__":
     unittest.main()

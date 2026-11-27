@@ -10,12 +10,15 @@ import threading
 import atexit
 from collections import deque
 import event_log as ev
-
+import validacion
+import salud
+import cierre
 # Parte de Ruy (Avance 02): RF-05, RF-06 y RF-30
 import concurrencia
 import escalamiento
 import estados
 import recuperacion
+import configuracion
 
 if os.name == "nt":
     # Windows no tiene /proc ni grupos de procesos como Linux: se le pregunta
@@ -157,7 +160,8 @@ def archivos_abiertos_linux(carpeta):
     return abiertos
 
 
-ARCHIVO_TRABAJOS = Path(__file__).resolve().parent.parent / "data" / "trabajos.json"
+DIRECTORIO_DATOS = configuracion.leer_directorio_datos(Path(__file__).resolve().parent.parent / "data")
+ARCHIVO_TRABAJOS = DIRECTORIO_DATOS / "trabajos.json"
 CARPETA_SALIDAS = ARCHIVO_TRABAJOS.parent / "salidas"
 
 
@@ -783,6 +787,8 @@ def limpiar_salidas_huerfanas():
 
 
 limpiar_salidas_huerfanas()
+INICIO_SERVICIO = time.time()  # RF-24: desde cuándo está activo el servicio
+INFO_RED = None                # lo completa servidor.py cuando abre el puerto
 BITACORA.record(ev.SYSTEM_STARTED, trabajos_previos=len(trabajos) + len(trabajos_cola))
 atexit.register(lambda: BITACORA.record(ev.SYSTEM_STOPPED))
 
@@ -981,6 +987,36 @@ def mostrar_recursos():
     print(f"Archivos abiertos ........... {len(abiertos)}{detalle_archivos(abiertos)}")
     print(f"Archivos de salida huérfanos  {len(sin_trabajo)}{detalle_archivos(sin_trabajo)}")
 
+def en_segundo_plano():
+    """Trabajos de afuera (sleep N &, ejecutar) que siguen vivos."""
+    return sum(
+        1 for trabajo in list(trabajos.values())
+        if trabajo.get("proceso") is not None and trabajo["proceso"].poll() is None
+    )
+
+
+def limite_actual():
+    """Límite de concurrencia vigente (el que cambia el comando 'limite <N>')."""
+    return control_concurrencia.limite  # confirma el nombre en el paso 4
+
+
+def mostrar_salud():
+    """RF-24: servicio activo, trabajos en ejecución y en cola, y errores recientes."""
+    with condicion_cola:
+        en_cola = len(cola_ids)
+    for linea in salud.construir_resumen(
+        inicio=INICIO_SERVICIO,
+        ahora=time.time(),
+        en_ejecucion=contar_activos(),
+        limite=limite_actual(),
+        en_cola=en_cola,
+        capacidad=CAPACIDAD_COLA,
+        en_segundo_plano=en_segundo_plano(),
+        registros=BITACORA.read(),
+        red=INFO_RED,
+        directorio_datos=str(ARCHIVO_TRABAJOS.parent),
+    ):
+        print(linea)
 
 def obtener_id(partes, comando, de_cola):
     """Valida que el comando traiga un ID válido y que exista. Devuelve el ID o None.
@@ -1110,6 +1146,7 @@ def liberar_recursos():
         signal.signal(signal.SIGTERM, signal.SIG_IGN)  # que otra señal no corte la limpieza
         signal.signal(signal.SIGHUP, signal.SIG_IGN)
     signal.signal(signal.SIGINT, signal.SIG_IGN)       # ni un Ctrl+C
+    empezar_cierre()  # RF-15: también cubre el cierre sin servidor de red (python src/main.py)
     cerrando.set()
     hilo_recolector.join(timeout=1)                    # que no compita con la limpieza
     with condicion_cola:
@@ -1164,6 +1201,35 @@ if os.name == "posix":
 # (Network Edition) comparten la misma cola.
 bloqueo_comandos = threading.Lock()
 
+def empezar_cierre():
+    """Marca el inicio del cierre (RF-15): desde aquí no se aceptan trabajos nuevos.
+
+    Se puede llamar más de una vez; solo la primera registra el evento.
+    """
+    global cola_cerrandose
+    # Espera (máximo 5 s) a que termine el comando en curso; así ningún trabajo
+    # nace a medias mientras se activa el cierre.
+    adquirido = bloqueo_comandos.acquire(timeout=5)
+    try:
+        with condicion_cola:
+            primera = not cola_cerrandose
+            cola_cerrandose = True
+            condicion_cola.notify_all()
+        if primera:
+            BITACORA.record(ev.SYSTEM_STOPPING)
+    finally:
+        if adquirido:
+            bloqueo_comandos.release()
+
+def solicitud_valida(entrada, origen):
+    """Rechaza solicitudes vacías, demasiado largas o con caracteres de control (RF-02, RNF-14)."""
+    error = validacion.validar_solicitud(entrada)
+    if error is None:
+        return True
+    # Solo un recorte del texto en la bitácora (RNF-15).
+    BITACORA.record(ev.JOB_REJECTED, comando=entrada[:80], motivo=error, origen=origen)
+    print(f"rechazado: {error}")
+    return False
 
 def atender(entrada):
     """Atiende un comando, venga del teclado o de un cliente de la red."""
@@ -1179,6 +1245,12 @@ def atender(entrada):
     if len(partes) >= 2 and partes[0] == "queue" and partes[1] == "cancelar":
         partes = partes[1:]
         desde_cola = True
+
+    if cola_cerrandose and cierre.es_envio_de_trabajo(partes):
+        # RF-15: durante el cierre no se aceptan trabajos nuevos.
+        BITACORA.record(ev.JOB_REJECTED, comando=entrada[:80], motivo="servicio cerrándose")
+        print("rechazado: el servicio se está cerrando y no acepta trabajos nuevos.")
+        return
 
     if partes[0] == "help":
         if len(partes) != 1:
@@ -1203,8 +1275,10 @@ def atender(entrada):
         print("  limite              Ver el límite de concurrencia.")
         print("  limite <N>          Cambiar el límite de concurrencia.")
         print("  politica            Ver la política de escalamiento (SIGTERM -> SIGKILL).")
-        print("  eventos [id]        Consultar la bitácora de eventos.")
+        print("  eventos             Consultar la bitácora de eventos.")
+        print("  eventos <id>        Consulta solo el evento que corresponde al ID especificado.")
         print("  recursos            Revisar procesos y archivos que siguen en uso.")
+        print("  salud               Ver el resumen de salud del servicio.")
         print("  help                Mostrar esta ayuda.")
 
     elif partes[0] == "limite":
@@ -1445,6 +1519,13 @@ def atender(entrada):
             return
         mostrar_recursos()
 
+    # Resumen de salud del servicio (RF-24)
+    elif partes[0] == "salud":
+        if len(partes) != 1:
+            print("salud: no acepta argumentos. Uso: salud")
+            return
+        mostrar_salud()
+
     # Manejar comandos inválidos sin terminar el servicio
     else:
         print(f"{partes[0]}: comando no reconocido")
@@ -1461,6 +1542,8 @@ def repl():
         partes = entrada.split()
         if len(partes) == 2 and partes[0] == "sleep":
             atender(entrada)  # sleep en primer plano: no detiene a los clientes de la red
+            continue
+        if entrada and not solicitud_valida(entrada, origen="local"):
             continue
         with bloqueo_comandos:
             atender(entrada)
