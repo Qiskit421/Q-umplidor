@@ -20,6 +20,7 @@ import time
 import control_acceso
 import event_log as ev
 import main  # arranca Q-umplidor: carga la cola, el candado de una sola instancia, etc.
+import protocolo
 
 
 def _leer_puerto():
@@ -39,10 +40,31 @@ PUERTO_DESCUBRIMIENTO = 5001   # para que el cliente encuentre al servidor solo 
 MENSAJE_BUSQUEDA = b"Q-UMPLIDOR?"
 INTENTOS_CLAVE = 3
 MAX_CLIENTES = 5               # RF-23, RNF-29
-LIMITE_LINEA = 2048            # RNF-14: tamaño máximo de un mensaje de red
+TIEMPO_AUTENTICACION = 30      # segundos para escribir la clave; quien no lo hace no ocupa un lugar
 
 POLITICA = control_acceso.AccessPolicy(control_acceso.leer_redes_permitidas())
 clientes_activos = threading.BoundedSemaphore(MAX_CLIENTES)
+
+
+def leer_inactividad():
+    """Segundos que una conexión puede estar callada antes de cerrarla (RF-22).
+    Se configura con Q_INACTIVIDAD; por defecto 300 (5 minutos)."""
+    valor = os.environ.get("Q_INACTIVIDAD", "300")
+    try:
+        segundos = int(valor)
+        if segundos < 1:
+            raise ValueError
+    except ValueError:
+        raise SystemExit(f"Q_INACTIVIDAD debe ser un entero mayor o igual a 1 (se recibió '{valor}')")
+    return segundos
+
+
+TIEMPO_INACTIVO = leer_inactividad()
+
+# Eventos de red que se agregan a la bitácora (RF-22, RF-28).
+CLIENT_CONNECTED = "CLIENT_CONNECTED"
+CLIENT_DISCONNECTED = "CLIENT_DISCONNECTED"
+RESPONSE_NOT_DELIVERED = "RESPONSE_NOT_DELIVERED"  # el comando se ejecutó, pero el cliente ya no estaba
 
 CLAVE = f"{secrets.randbelow(10**6):06d}"  # nueva en cada arranque; se muestra en la pantalla del servidor
 
@@ -84,8 +106,15 @@ def ip_local():
             return "127.0.0.1"
 
 
-def enviar(conexion, datos):
-    conexion.sendall((json.dumps(datos, ensure_ascii=False) + "\n").encode("utf-8"))
+enviar = protocolo.enviar_mensaje
+
+
+def despedir(conexion, motivo):
+    """Avisa al cliente por qué se cierra la conexión, si todavía se puede."""
+    try:
+        enviar(conexion, {"error": motivo, "cerrar": True})
+    except OSError:
+        pass  # el cliente ya no está; no hay a quién avisar
 
 
 def ejecutar_remoto(comando, origen):
@@ -120,49 +149,82 @@ def rechazar(conexion, ip, motivo, mensaje):
         conexion.close()
 
 
-def atender_cliente(conexion, ip):
-    conectado = False
-    try:
-        conexion.settimeout(30)  # quien no se autentica a tiempo no ocupa un lugar
-        with conexion, conexion.makefile("r", encoding="utf-8") as lector:
-            for _ in range(INTENTOS_CLAVE):
-                linea = lector.readline(LIMITE_LINEA + 1)
-                if not linea or len(linea) > LIMITE_LINEA:
-                    return
-                try:
-                    clave = json.loads(linea).get("clave")
-                except (ValueError, AttributeError):
-                    clave = None
-                if clave == CLAVE:
-                    enviar(conexion, {"ok": True, "servidor": socket.gethostname()})
-                    conectado = True
-                    break
-                time.sleep(1)  # frena a quien intente adivinar la clave
-                enviar(conexion, {"ok": False, "mensaje": "clave incorrecta"})
-            if not conectado:
-                main.BITACORA.record(ev.ACCESS_DENIED, ip=ip, motivo="CLAVE_INCORRECTA")
-                return
-            conexion.settimeout(None)
+def atender_cliente(conexion, direccion):
+    """Atiende a un cliente hasta que se va, se queda callado o manda algo inválido.
 
-            while True:
-                linea = lector.readline(LIMITE_LINEA + 1)
-                if not linea:
-                    break
-                if len(linea) > LIMITE_LINEA:
-                    main.BITACORA.record(ev.JOB_REJECTED, comando=linea[:80],
-                                         motivo="mensaje de red demasiado largo", origen=ip)
-                    enviar(conexion, {"salida": f"rechazado: mensaje demasiado largo (máximo {LIMITE_LINEA}).\n"})
-                    return
-                try:
-                    comando = str(json.loads(linea)["comando"]).strip()
-                except (ValueError, KeyError, TypeError):
-                    enviar(conexion, {"salida": "error: petición no válida\n"})
-                    continue
-                enviar(conexion, {"salida": ejecutar_remoto(comando, ip)})
-    except OSError:
-        pass  # el cliente se fue sin avisar
+    Ninguna falla de un cliente debe tumbar al servidor ni dejar trabajos a
+    medias: cada desconexión queda en la bitácora con su motivo (RF-22, RF-28).
+    Al terminar, siempre libera su lugar en el límite de clientes (RF-23).
+    """
+    ip = direccion[0]
+    cliente = f"{ip}:{direccion[1]}"
+    autenticado = False
+    motivo = "el cliente cerró la conexión"
+    espera = TIEMPO_AUTENTICACION
+    conexion.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)  # detecta conexiones muertas (cable, wifi)
+    conexion.settimeout(espera)
+    lector = protocolo.LectorMensajes(conexion)
+    try:
+        for _ in range(INTENTOS_CLAVE):
+            try:
+                clave = lector.leer().get("clave")
+            except protocolo.MensajeInvalido:
+                clave = None
+            if clave == CLAVE:
+                enviar(conexion, {"ok": True, "servidor": socket.gethostname()})
+                autenticado = True
+                break
+            time.sleep(1)  # frena a quien intente adivinar la clave
+            enviar(conexion, {"ok": False, "mensaje": "clave incorrecta"})
+        if not autenticado:
+            motivo = "demasiados intentos de clave"
+            main.BITACORA.record(ev.ACCESS_DENIED, ip=ip, motivo="CLAVE_INCORRECTA")  # nunca la clave (RNF-15)
+            return
+        espera = TIEMPO_INACTIVO
+        conexion.settimeout(espera)
+        main.BITACORA.record(CLIENT_CONNECTED, cliente=cliente)
+
+        while True:
+            try:
+                mensaje = lector.leer()
+            except protocolo.MensajeInvalido as error:
+                enviar(conexion, {"salida": f"error: petición no válida ({error})\n"})
+                continue
+            if "comando" not in mensaje:
+                enviar(conexion, {"salida": "error: petición no válida (falta el campo comando)\n"})
+                continue
+            comando = str(mensaje["comando"]).strip()
+            salida = ejecutar_remoto(comando, ip)
+            try:
+                enviar(conexion, {"salida": salida})
+            except OSError:
+                # El comando sí se ejecutó; lo que se perdió fue la respuesta (RF-28).
+                main.BITACORA.record(RESPONSE_NOT_DELIVERED, cliente=cliente, comando=comando)
+                raise
+    except protocolo.ConexionCerrada as cerrada:
+        if cerrada.incompletos:
+            motivo = f"el cliente cerró la conexión a mitad de un mensaje ({cerrada.incompletos} bytes descartados)"
+    except socket.timeout:  # en Python 3.10+ es lo mismo que TimeoutError
+        if autenticado:
+            motivo = f"inactividad ({espera} s sin mensajes)"
+            despedir(conexion, f"desconectado por inactividad ({espera} s sin mensajes)")
+        else:
+            motivo = f"no se autenticó en {espera} s"
+            main.BITACORA.record(ev.ACCESS_DENIED, ip=ip, motivo="SIN_AUTENTICAR")
+    except protocolo.MensajeDemasiadoGrande as error:
+        motivo = f"mensaje demasiado grande: {error}"
+        despedir(conexion, f"mensaje demasiado grande (máximo {protocolo.MAX_MENSAJE} bytes)")
+    except OSError as error:
+        motivo = f"conexión perdida ({error.strerror or error})"
+    except Exception as error:  # nada de un cliente debe tumbar al servidor
+        motivo = f"error inesperado ({type(error).__name__}: {error})"
     finally:
-        clientes_activos.release()
+        try:
+            conexion.close()
+        finally:
+            clientes_activos.release()  # se libera el lugar tomado en escuchar_clientes
+        if autenticado:
+            main.BITACORA.record(CLIENT_DISCONNECTED, cliente=cliente, motivo=motivo)
 
 
 def escuchar_clientes(servidor):
@@ -177,7 +239,7 @@ def escuchar_clientes(servidor):
             rechazar(conexion, ip, "MAX_CLIENTES",
                      "servidor ocupado: demasiados clientes conectados. Intente más tarde.")
             continue
-        threading.Thread(target=atender_cliente, args=(conexion, ip), daemon=True).start()
+        threading.Thread(target=atender_cliente, args=(conexion, direccion), daemon=True).start()
 
 
 def responder_busquedas():
@@ -199,6 +261,9 @@ def responder_busquedas():
 
 def iniciar():
     servidor = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # Tras cerrar el servidor con clientes conectados, el puerto queda en TIME_WAIT
+    # cerca de un minuto; sin esto, reiniciarlo falla con "Address already in use".
+    servidor.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         servidor.bind((INTERFAZ, PUERTO))
         servidor.listen()
@@ -215,6 +280,7 @@ def iniciar():
     print(f"  Clave de acceso: {CLAVE}")
     if INTERFAZ == "0.0.0.0":
         print("  [aviso] escuchando en todas las interfaces; solo se aceptan las redes de Q_REDES_PERMITIDAS")
+    print(f"  Inactividad:     se desconecta a un cliente tras {TIEMPO_INACTIVO} s sin mensajes")
     print("  En la otra computadora: python cliente.py")
     print(f"  (si no encuentra el servidor: python cliente.py {ip})")
     print()

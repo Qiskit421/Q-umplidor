@@ -1,0 +1,30 @@
+Servidor de prueba en /tmp/q-umplidor-red-9w7cof85 (Q_INACTIVIDAD=3)
+
+[PASS] TC-028 Mensaje normal: 'Límite de concurrencia: 2 (ocupados ahora: 0)\n'
+[PASS] TC-029 Mensaje fragmentado byte a byte: 22 envíos de 1 byte -> una respuesta completa
+[PASS] TC-030 Dos mensajes en un solo envío: dos respuestas separadas, en orden
+[PASS] TC-031 JSON inválido: 'error: petición no válida (el mensaje no es JSON válido)\n'
+[PASS] TC-032 Mensaje que no es UTF-8: 'error: petición no válida (el mensaje no está en UTF-8)\n'
+[PASS] TC-033 Mensaje demasiado grande: cortó la conexión tras 256 KB; aviso={"error": "mensaje demasiado grande (máximo 65536 
+[PASS] TC-034 Desconexión a mitad de un comando: servidor vivo y el trabajo aparece en queue
+[PASS] TC-035 Desconexión a mitad de un mensaje: nada se ejecutó del mensaje partido
+[PASS] TC-036 Cliente inactivo: cerrada a los 3.0 s (Q_INACTIVIDAD=3); aviso={"error": "desconectado por inactividad (3 s sin m
+[PASS] TC-037 Reinicio con clientes conectados: el cliente detectó el cierre y el servidor reabrió el puerto de inmediato
+
+Servidor vivo al terminar: sí
+Traceback en la pantalla del servidor: no
+Eventos de conexión en la bitácora: 25
+  127.0.0.1:58246: el cliente cerró la conexión
+  127.0.0.1:58250: el cliente cerró la conexión
+  127.0.0.1:58262: el cliente cerró la conexión
+  127.0.0.1:58274: el cliente cerró la conexión
+  127.0.0.1:58286: el cliente cerró la conexión
+  127.0.0.1:58300: mensaje demasiado grande: más de 65536 bytes sin fin de mensaje
+  127.0.0.1:58302: el cliente cerró la conexión
+  127.0.0.1:58314: el cliente cerró la conexión
+  127.0.0.1:58328: el cliente cerró la conexión
+  127.0.0.1:58330: el cliente cerró la conexión a mitad de un mensaje (26 bytes descartados)
+  127.0.0.1:58338: el cliente cerró la conexión
+  127.0.0.1:58370: el cliente cerró la conexión
+
+Resultado: PASS

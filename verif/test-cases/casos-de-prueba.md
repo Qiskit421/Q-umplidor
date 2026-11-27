@@ -228,3 +228,71 @@ python3 verif/scripts/prueba_avance02_ruy.py TC-025     # uno
 - **Entrada:** `python -m unittest discover -s verif/test-cases -v`.
 - **Resultado esperado:** pasan las pruebas de orden de eventos, filtro por trabajo, continuidad de la secuencia, línea corrupta y escritura desde varios hilos.
 - **Resultado obtenido:** `Ran 5 tests` con resultado `OK`.
+
+# Avance 03 — Red: mensajes fragmentados y desconexiones
+
+**Responsable:** Oscar Aguilera.
+
+Todos los casos los ejecuta y verifica automáticamente `verif/scripts/prueba_red.py`. El script corre una copia de `src/` en una carpeta temporal (no toca `data/`), arranca `src/servidor.py` con `Q_INACTIVIDAD=3` y se conecta como cliente con sockets. Necesita el puerto 5000 libre. Al final revisa que el servidor siga vivo, que no haya `Traceback` en su pantalla y muestra los eventos `CLIENT_DISCONNECTED` con su motivo. La evidencia está en `verif/results/TC-028-037-<fecha>/`.
+
+```bash
+python3 verif/scripts/prueba_red.py            # todos (unos 5 s)
+python3 verif/scripts/prueba_red.py TC-036     # uno
+```
+
+Formato de los mensajes: un objeto JSON en UTF-8 terminado en `\n`, máximo 64 KiB (ver la guía técnica, sección 10).
+
+## TC-028 — Mensaje normal (RF-21)
+
+- **Entrada:** `{"comando": "limite"}\n` en un solo envío.
+- **Resultado esperado:** una respuesta `{"salida": "Límite de concurrencia: ..."}`.
+
+## TC-029 — Mensaje fragmentado byte a byte (RF-21)
+
+- **Entrada:** el mismo mensaje enviado en 22 `send()` de 1 byte, con 10 ms entre cada uno.
+- **Resultado esperado:** el servidor junta los pedazos y responde una sola vez, con la respuesta completa.
+
+## TC-030 — Dos mensajes en un solo envío (RF-21)
+
+- **Entrada:** `{"comando": "limite"}\n{"comando": "politica"}\n` en un solo `send()`.
+- **Resultado esperado:** dos respuestas separadas, en el mismo orden.
+
+## TC-031 — JSON inválido (RF-21)
+
+- **Entrada:** `esto no es json\n` y después `{"comando": "limite"}\n` por la misma conexión.
+- **Resultado esperado:** `error: petición no válida (el mensaje no es JSON válido)` y la conexión sigue sirviendo.
+
+## TC-032 — Mensaje que no es UTF-8 (RF-21)
+
+- **Entrada:** `{"comando": "\xff\xfe"}\n` (bytes inválidos en UTF-8) y después `limite`.
+- **Resultado esperado:** `error: petición no válida (el mensaje no está en UTF-8)`; la conexión sigue y no aparece `Traceback`.
+- **Antes de la corrección:** el hilo del cliente moría con `UnicodeDecodeError` y dejaba un `Traceback` en la pantalla del servidor.
+
+## TC-033 — Mensaje demasiado grande (RF-21, RF-22)
+
+- **Entrada:** bloques de 64 KiB sin `\n`, hasta 10 MB.
+- **Resultado esperado:** al pasar de 64 KiB el servidor manda `{"error": "mensaje demasiado grande ...", "cerrar": true}`, cierra esa conexión y sigue atendiendo a los demás.
+- **Antes de la corrección:** el servidor guardaba en memoria los 10 MB sin cortar.
+
+## TC-034 — Desconexión a mitad de un comando (RF-22, RF-28)
+
+- **Entrada:** `{"comando": "queue sleep 2"}\n` y cerrar el socket sin leer la respuesta; luego `queue` desde otra conexión.
+- **Resultado esperado:** el trabajo quedó registrado y aparece en `queue`; el servidor sigue vivo. Si el servidor alcanza a intentar responder, la bitácora registra `RESPONSE_NOT_DELIVERED`.
+
+## TC-035 — Desconexión a mitad de un mensaje (RF-21, RF-22)
+
+- **Entrada:** `{"comando": "queue sleep 7` (sin cerrar ni `\n`) y cerrar el socket.
+- **Resultado esperado:** el mensaje incompleto se descarta: no se ejecuta nada y la bitácora registra `CLIENT_DISCONNECTED` con `el cliente cerró la conexión a mitad de un mensaje (N bytes descartados)`.
+
+## TC-036 — Cliente inactivo (RF-22)
+
+- **Configuración:** `Q_INACTIVIDAD=3` (por defecto son 300 s).
+- **Entrada:** abrir la conexión y no mandar nada.
+- **Resultado esperado:** a los 3 s el servidor manda `{"error": "desconectado por inactividad (3 s sin mensajes)", "cerrar": true}` y cierra.
+- **Antes de la corrección:** la conexión y su hilo se quedaban abiertos para siempre.
+
+## TC-037 — Reinicio con clientes conectados (RF-22)
+
+- **Entrada:** cliente conectado; se detiene el servidor y se vuelve a arrancar de inmediato.
+- **Resultado esperado:** el cliente detecta que se cerró la conexión, y el servidor vuelve a abrir el puerto 5000 sin esperar.
+- **Antes de la corrección:** fallaba con `No se pudo abrir el puerto 5000 para la red: Address already in use` durante cerca de un minuto (puerto en `TIME_WAIT`).
